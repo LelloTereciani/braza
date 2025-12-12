@@ -75,6 +75,7 @@ O **BRAZA** é a moeda do empreendedor brasileiro - aquele que acorda cedo, trab
 
 ### Módulos
 
+```
 braza_token/
 ├── src/
 │   ├── lib.rs              # Entry point
@@ -92,7 +93,8 @@ braza_token/
 │   ├── verify.sh           # Verificar deploy
 │   └── deploy-all.sh       # Deploy completo automatizado
 └── tests/
-└── (próximos passos)
+    └── (próximos passos)
+```
 
 ### Funcionalidades Implementadas
 
