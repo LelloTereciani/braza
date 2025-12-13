@@ -51,24 +51,6 @@ O **BRAZA** é a moeda do empreendedor brasileiro - aquele que acorda cedo, trab
 | **Reserva** | 2.1M BRAZA | 10% | Governança futura |
 | **TOTAL** | 21M BRAZA | 100% | - |
 
-### Estrutura de Taxas
-
-#### Taxa Progressiva (Anti-Concentração)
-
-| Tier | Holding | Taxa |
-|------|---------|------|
-| **Tier 1** | < 0.1% supply | 0.05% |
-| **Tier 2** | 0.1% - 1% supply | 0.15% |
-| **Tier 3** | > 1% supply | 0.30% |
-
-#### Taxa Contextual
-
-| Contexto | Taxa |
-|----------|------|
-| **Exchange → Exchange** | 0.10% |
-| **Comércio Local** | 0.05% |
-| **Distribuição Admin** | 0% (sem taxa) |
-
 ---
 
 ## 🏗️ Arquitetura do Contrato
