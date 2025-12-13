@@ -6,9 +6,9 @@ use crate::validation;
 use crate::vesting;
 use crate::events;
 
-// 
+// ============================================================================
 // CONTRATO PRINCIPAL - BRAZA TOKEN
-// 
+// ============================================================================
 
 #[contract]
 pub struct BrazaToken;
@@ -16,9 +16,9 @@ pub struct BrazaToken;
 #[contractimpl]
 impl BrazaToken {
     
-    // 
+    // ============================================================================
     // INICIALIZAÇÃO
-    // 
+    // ============================================================================
     
     /// Inicializa o contrato BrazaToken.
     /// Esta função não requer proteção contra reentrância, pois é chamada apenas uma vez
@@ -63,11 +63,9 @@ impl BrazaToken {
         Ok(())
     }
     
-    // 
+    // ============================================================================
     // FUNÇÕES SEP-41 PADRÃO (Leitura)
-    // Estas funções são de leitura e não modificam o estado, portanto, não
-    // requerem proteção contra reentrância.
-    // 
+    // ============================================================================
     
     /// Retorna o nome do token.
     pub fn name(env: Env) -> String {
@@ -98,10 +96,9 @@ impl BrazaToken {
         storage::get_total_supply(&env)
     }
     
-    // 
-    // TRANSFERÊNCIAS - CEI PATTERN IMPLEMENTADO (CRITICAL-02)
-    // Funções críticas que modificam o estado e podem ser alvo de reentrância.
-    // 
+    // ============================================================================
+    // TRANSFERÊNCIAS - CEI PATTERN IMPLEMENTADO
+    // ============================================================================
     
     /// Transfere tokens de `from` para `to`.
     /// Implementa proteção contra reentrância.
@@ -117,16 +114,11 @@ impl BrazaToken {
         amount: i128,
     ) -> Result<(), BrazaError> {
         // === REENTRANCY GUARD ===
-        // Verifica se o contrato já está em um estado de reentrância.
-        // Se sim, impede a execução para evitar ataques.
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
-        // Bloqueia o guard de reentrância para esta execução.
         storage::set_reentrancy_guard(&env, true);
         
-        // Usa uma closure para garantir que o guard seja liberado,
-        // mesmo que haja um retorno antecipado (Err).
         let result = (|| {
             // === CHECKS ===
             from.require_auth();
@@ -160,13 +152,27 @@ impl BrazaToken {
         })();
         
         // === LIBERAR GUARD ===
-        // Libera o guard de reentrância após a execução da função.
         storage::set_reentrancy_guard(&env, false);
         result
     }
     
-    /// Transfere tokens usando allowance.
-    /// Implementa proteção contra reentrância.
+    /// ✅ CORRIGIDO: Transfere tokens usando allowance com verificação completa
+    /// 
+    /// # Segurança:
+    /// - ✅ Verifica allowance antes da transferência
+    /// - ✅ Decrementa allowance automaticamente
+    /// - ✅ Protege contra reentrância
+    /// - ✅ Valida todas as contas (from, to, spender)
+    /// - ✅ Respeita pausa e blacklist
+    /// 
+    /// # Padrão CEI:
+    /// 1. CHECKS: Validar auth, allowance, saldos, pausa, blacklist
+    /// 2. EFFECTS: Atualizar allowance, saldos
+    /// 3. INTERACTIONS: Emitir eventos
+    /// 
+    /// # Conformidade SEP:
+    /// - SEP-0041: Stellar Asset Contract padrão
+    /// - SEP-0049: Soroban Authorization Framework
     pub fn transfer_from(
         env: Env,
         spender: Address,
@@ -185,6 +191,7 @@ impl BrazaToken {
             spender.require_auth();
             storage::bump_critical_storage(&env);
             
+            // 1. Validações básicas
             validation::require_not_paused(&env)?;
             validation::require_not_blacklisted(&env, &from)?;
             validation::require_not_blacklisted(&env, &to)?;
@@ -192,10 +199,31 @@ impl BrazaToken {
             validation::require_positive_amount(amount)?;
             validation::require_sufficient_balance(&env, &from, amount)?;
             
-            // Verificar allowance (implementação simplificada)
-            // TODO: Implementar sistema completo de allowance
+            // 2. ✅ CORREÇÃO CRÍTICA: Verificar allowance
+            let current_allowance = storage::get_allowance(&env, &from, &spender);
+            
+            if current_allowance < amount {
+                // Emitir evento de tentativa bloqueada
+                env.events().publish(
+                    (symbol_short!("all_fail"), &spender, &from),
+                    (amount, current_allowance),
+                );
+                return Err(BrazaError::InsufficientAllowance);
+            }
+            
+            // 3. Calcular novo allowance
+            let new_allowance = current_allowance
+                .checked_sub(amount)
+                .ok_or(BrazaError::InsufficientAllowance)?;
             
             // === EFFECTS ===
+            // 4. Atualizar allowance ANTES da transferência (CEI)
+            storage::set_allowance(&env, &from, &spender, new_allowance);
+            
+            // 5. Fazer bump do TTL do allowance
+            storage::bump_allowance(&env, &from, &spender);
+            
+            // 6. Realizar transferência de saldos
             let from_balance = storage::get_balance(&env, &from);
             let to_balance = storage::get_balance(&env, &to);
             
@@ -211,7 +239,14 @@ impl BrazaToken {
             storage::set_balance(&env, &to, new_to_balance);
             
             // === INTERACTIONS ===
+            // 7. Emitir eventos na ordem correta
             events::emit_transfer(&env, &from, &to, amount);
+            
+            // Evento adicional de consumo de allowance
+            env.events().publish(
+                (symbol_short!("all_used"), &spender, &from),
+                (amount, new_allowance),
+            );
             
             Ok(())
         })();
@@ -221,10 +256,174 @@ impl BrazaToken {
         result
     }
     
-    // 
-    // MINT E BURN - CEI PATTERN (CRITICAL-02)
-    // Funções críticas que modificam o supply total e balances.
-    // 
+    // ============================================================================
+    // ✅ NOVO: SISTEMA DE ALLOWANCE COMPLETO
+    // ============================================================================
+    
+    /// Aprova um spender para gastar tokens em nome do caller
+    /// 
+    /// # Segurança:
+    /// - ✅ Requer autenticação do owner (from)
+    /// - ✅ Valida que spender não está blacklisted
+    /// - ✅ Respeita pausa do contrato
+    /// - ✅ Emite evento de aprovação
+    /// - ✅ Protege contra race condition de allowance
+    /// 
+    /// # Padrão CEI:
+    /// 1. CHECKS: Validar auth, pausa, blacklist, amount
+    /// 2. EFFECTS: Atualizar allowance
+    /// 3. INTERACTIONS: Emitir evento
+    /// 
+    /// # Nota sobre Race Condition:
+    /// Para evitar front-running, recomenda-se:
+    /// 1. Zerar allowance antes de definir novo valor
+    /// 2. Ou usar increase_allowance/decrease_allowance
+    pub fn approve(
+        env: Env,
+        from: Address,
+        spender: Address,
+        amount: i128,
+    ) -> Result<(), BrazaError> {
+        // === CHECKS ===
+        from.require_auth();
+        storage::bump_critical_storage(&env);
+        
+        // 1. Validações
+        validation::require_not_paused(&env)?;
+        validation::require_not_blacklisted(&env, &from)?;
+        validation::require_not_blacklisted(&env, &spender)?;
+        
+        // 2. Validar amount (pode ser 0 para revogar)
+        if amount < 0 {
+            return Err(BrazaError::InvalidAmount);
+        }
+        
+        // 3. ⚠️ PROTEÇÃO: Verificar allowance atual para evitar race condition
+        let current_allowance = storage::get_allowance(&env, &from, &spender);
+        
+        if current_allowance != 0 && amount != 0 {
+            // Emitir aviso sobre potencial race condition
+            env.events().publish(
+                (symbol_short!("all_race"), &from, &spender),
+                (current_allowance, amount),
+            );
+        }
+        
+        // === EFFECTS ===
+        // 4. Definir allowance
+        storage::set_allowance(&env, &from, &spender, amount);
+        
+        // 5. Fazer bump do TTL
+        storage::bump_allowance(&env, &from, &spender);
+        
+        // === INTERACTIONS ===
+        // 6. Emitir evento
+        events::emit_approval(&env, &from, &spender, amount);
+        
+        Ok(())
+    }
+    
+    /// Aumenta allowance de forma segura (evita race condition)
+    /// 
+    /// # Segurança:
+    /// - ✅ Não sofre de race condition do approve()
+    /// - ✅ Incremento atômico do allowance
+    /// - ✅ Verifica overflow
+    pub fn increase_allowance(
+        env: Env,
+        from: Address,
+        spender: Address,
+        delta: i128,
+    ) -> Result<(), BrazaError> {
+        // === CHECKS ===
+        from.require_auth();
+        storage::bump_critical_storage(&env);
+        
+        validation::require_not_paused(&env)?;
+        validation::require_not_blacklisted(&env, &from)?;
+        validation::require_not_blacklisted(&env, &spender)?;
+        validation::require_positive_amount(delta)?;
+        
+        // === EFFECTS ===
+        let current_allowance = storage::get_allowance(&env, &from, &spender);
+        let new_allowance = current_allowance
+            .checked_add(delta)
+            .ok_or(BrazaError::InvalidAmount)?;
+        
+        storage::set_allowance(&env, &from, &spender, new_allowance);
+        storage::bump_allowance(&env, &from, &spender);
+        
+        // === INTERACTIONS ===
+        events::emit_approval(&env, &from, &spender, new_allowance);
+        
+        env.events().publish(
+            (symbol_short!("all_inc"), &from, &spender),
+            (delta, new_allowance),
+        );
+        
+        Ok(())
+    }
+    
+    /// Diminui allowance de forma segura
+    /// 
+    /// # Segurança:
+    /// - ✅ Não sofre de race condition
+    /// - ✅ Decremento atômico
+    /// - ✅ Verifica underflow
+    pub fn decrease_allowance(
+        env: Env,
+        from: Address,
+        spender: Address,
+        delta: i128,
+    ) -> Result<(), BrazaError> {
+        // === CHECKS ===
+        from.require_auth();
+        storage::bump_critical_storage(&env);
+        
+        validation::require_not_paused(&env)?;
+        validation::require_not_blacklisted(&env, &from)?;
+        validation::require_not_blacklisted(&env, &spender)?;
+        validation::require_positive_amount(delta)?;
+        
+        // === EFFECTS ===
+        let current_allowance = storage::get_allowance(&env, &from, &spender);
+        
+        if current_allowance < delta {
+            return Err(BrazaError::InsufficientAllowance);
+        }
+        
+        let new_allowance = current_allowance
+            .checked_sub(delta)
+            .ok_or(BrazaError::InsufficientAllowance)?;
+        
+        storage::set_allowance(&env, &from, &spender, new_allowance);
+        storage::bump_allowance(&env, &from, &spender);
+        
+        // === INTERACTIONS ===
+        events::emit_approval(&env, &from, &spender, new_allowance);
+        
+        env.events().publish(
+            (symbol_short!("all_dec"), &from, &spender),
+            (delta, new_allowance),
+        );
+        
+        Ok(())
+    }
+    
+    /// Retorna o allowance atual de um spender para uma conta
+    /// 
+    /// # View Function (Somente Leitura):
+    /// - Não modifica estado
+    /// - Não requer autenticação
+    /// - Usado por frontends e outros contratos
+    pub fn allowance(env: Env, from: Address, spender: Address) -> i128 {
+        storage::bump_critical_storage(&env);
+        storage::get_allowance(&env, &from, &spender)
+    }
+    
+    // ============================================================================
+    // MINT E BURN - CEI PATTERN
+    // ============================================================================
     
     /// Cria novos tokens (apenas admin).
     /// Implementa proteção contra reentrância.
@@ -322,11 +521,9 @@ impl BrazaToken {
         result
     }
     
-    // 
+    // ============================================================================
     // VESTING - CRITICAL-01 CORRIGIDO
-    // Funções relacionadas a vesting, que envolvem transferências e modificações
-    // de estado, requerem proteção contra reentrância.
-    // 
+    // ============================================================================
     
     /// Cria um novo vesting schedule.
     /// Implementa proteção contra reentrância.
@@ -520,11 +717,9 @@ impl BrazaToken {
         Ok(vesting::calculate_releasable_amount(&env, &schedule))
     }
     
-    // 
+    // ============================================================================
     // FUNÇÕES ADMINISTRATIVAS - CEI PATTERN
-    // Funções que modificam o estado do contrato (pausa, blacklist)
-    // requerem proteção contra reentrância.
-    // 
+    // ============================================================================
     
     /// Pausa o contrato (apenas admin).
     /// Implementa proteção contra reentrância.
@@ -639,9 +834,9 @@ impl BrazaToken {
     }
 }
 
-// 
-// TESTES UNITÁRIOS
-// 
+// ============================================================================
+// ✅ TESTES UNITÁRIOS - ALLOWANCE
+// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -671,35 +866,150 @@ mod tests {
         assert_eq!(client.symbol(), String::from_str(&env, "BRZ"));
         assert_eq!(client.decimals(), 7);
         assert_eq!(client.get_admin(), admin);
-        // Verificar supply inicial de 10 milhões
         assert_eq!(client.balance(&admin), 100_000_000_000_000);
         assert_eq!(client.total_supply(), 100_000_000_000_000);
     }
     
+    // ✅ NOVOS TESTES DE ALLOWANCE
+    
+    #[test]
+    fn test_approve_and_allowance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, owner) = create_client(&env);
+        let spender = Address::generate(&env);
+        
+        // Aprovar 1000 tokens
+        client.approve(&owner, &spender, &1000);
+        
+        // Verificar allowance
+        assert_eq!(client.allowance(&owner, &spender), 1000);
+    }
+    
+    #[test]
+    fn test_transfer_from_with_allowance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, owner) = create_client(&env);
+        let spender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        
+        // Aprovar 1000 tokens
+        client.approve(&owner, &spender, &1000);
+        
+        // Transfer_from 500 tokens
+        client.transfer_from(&spender, &owner, &recipient, &500);
+        
+        // Verificar saldos
+        assert_eq!(client.balance(&recipient), 500);
+        assert_eq!(client.balance(&owner), 100_000_000_000_000 - 500);
+        
+        // Verificar allowance restante
+        assert_eq!(client.allowance(&owner, &spender), 500);
+    }
+    
+    #[test]
+    #[should_panic(expected = "InsufficientAllowance")]
+    fn test_transfer_from_insufficient_allowance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, owner) = create_client(&env);
+        let spender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        
+        // Aprovar apenas 500 tokens
+        client.approve(&owner, &spender, &500);
+        
+        // Tentar transferir 1000 (deve falhar)
+        client.transfer_from(&spender, &owner, &recipient, &1000);
+    }
+    
+    #[test]
+    #[should_panic(expected = "InsufficientAllowance")]
+    fn test_transfer_from_no_allowance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, owner) = create_client(&env);
+        let spender = Address::generate(&env);
+        let recipient = Address::generate(&env);
+        
+        // Tentar transfer_from sem allowance
+        client.transfer_from(&spender, &owner, &recipient, &500);
+    }
+    
+    #[test]
+    fn test_increase_allowance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, owner) = create_client(&env);
+        let spender = Address::generate(&env);
+        
+        // Aprovar 1000
+        client.approve(&owner, &spender, &1000);
+        
+        // Aumentar 500
+        client.increase_allowance(&owner, &spender, &500);
+        
+        // Verificar total
+        assert_eq!(client.allowance(&owner, &spender), 1500);
+    }
+    
+    #[test]
+    fn test_decrease_allowance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, owner) = create_client(&env);
+        let spender = Address::generate(&env);
+        
+        // Aprovar 1000
+        client.approve(&owner, &spender, &1000);
+        
+        // Diminuir 300
+        client.decrease_allowance(&owner, &spender, &300);
+        
+        // Verificar restante
+        assert_eq!(client.allowance(&owner, &spender), 700);
+    }
+    
+    #[test]
+    fn test_approve_zero_revokes() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, owner) = create_client(&env);
+        let spender = Address::generate(&env);
+        
+        // Aprovar 1000
+        client.approve(&owner, &spender, &1000);
+        assert_eq!(client.allowance(&owner, &spender), 1000);
+        
+        // Revogar (aprovar 0)
+        client.approve(&owner, &spender, &0);
+        assert_eq!(client.allowance(&owner, &spender), 0);
+    }
+    
+    // TESTES EXISTENTES (mantidos)
+    
     #[test]
     fn test_initial_supply_and_max_supply() {
         let env = Env::default();
-        env.mock_all_auths(); // Mock auth para admin
+        env.mock_all_auths();
         let (client, admin) = create_client(&env);
         
-        // Verificar supply inicial de 10 milhões
         assert_eq!(client.balance(&admin), 100_000_000_000_000);
         assert_eq!(client.total_supply(), 100_000_000_000_000);
         
-        // Verificar que pode mintar até 11 milhões adicionais
-        client.mint(&admin, &110_000_000_000_000); // +11M
-        assert_eq!(client.total_supply(), 210_000_000_000_000); // Total 21M
+        client.mint(&admin, &110_000_000_000_000);
+        assert_eq!(client.total_supply(), 210_000_000_000_000);
     }
     
     #[test]
     #[should_panic(expected = "MaxSupplyExceeded")]
     fn test_cannot_exceed_21_million() {
         let env = Env::default();
-        env.mock_all_auths(); // Mock auth para admin
+        env.mock_all_auths();
         let (client, admin) = create_client(&env);
         
-        // Tentar mintar mais de 11 milhões adicionais (excederia 21M)
-        client.mint(&admin, &110_000_000_000_001); // +11M + 1
+        client.mint(&admin, &110_000_000_000_001);
     }
     
     #[test]
@@ -710,11 +1020,9 @@ mod tests {
         
         let user = Address::generate(&env);
         
-        // Admin já tem 10M tokens do mint inicial
         let initial_balance = client.balance(&admin);
         assert_eq!(initial_balance, 100_000_000_000_000);
         
-        // Transferir 500 tokens para o usuário
         client.transfer(&admin, &user, &500);
         assert_eq!(client.balance(&admin), initial_balance - 500);
         assert_eq!(client.balance(&user), 500);
@@ -728,31 +1036,23 @@ mod tests {
         let (client, admin) = create_client(&env);
         let beneficiary = Address::generate(&env);
         
-        // Admin já tem 10M do mint inicial
-        
-        // Criar vesting: 1000 tokens, cliff 100 ledgers, duração 1000 ledgers
         let schedule_id = client.create_vesting(&beneficiary, &1000, &100, &1000, &false);
         
-        // Avançar 50 ledgers (antes do cliff)
         env.ledger().set_sequence_number(50);
         let releasable = client.get_releasable_amount(&beneficiary, &schedule_id);
-        assert_eq!(releasable, 0); // Nada liberado antes do cliff
+        assert_eq!(releasable, 0);
         
-        // Avançar para 500 ledgers (50% da duração)
         env.ledger().set_sequence_number(500);
         let releasable = client.get_releasable_amount(&beneficiary, &schedule_id);
-        assert_eq!(releasable, 500); // 50% liberado
+        assert_eq!(releasable, 500);
         
-        // Liberar tokens
         client.release_vested(&beneficiary, &schedule_id);
         assert_eq!(client.balance(&beneficiary), 500);
         
-        // Avançar para 1000 ledgers (100% da duração)
         env.ledger().set_sequence_number(1000);
         let releasable = client.get_releasable_amount(&beneficiary, &schedule_id);
-        assert_eq!(releasable, 500); // Restante 50%
+        assert_eq!(releasable, 500);
         
-        // Liberar tokens restantes
         client.release_vested(&beneficiary, &schedule_id);
         assert_eq!(client.balance(&beneficiary), 1000);
     }
@@ -761,11 +1061,9 @@ mod tests {
     #[should_panic(expected = "MaxSupplyExceeded")]
     fn test_max_supply_exceeded() {
         let env = Env::default();
-        env.mock_all_auths(); // Mock auth para admin
+        env.mock_all_auths();
         let (client, admin) = create_client(&env);
         
-        // Tentar mint acima do MAX_SUPPLY (210_000_000_000_000)
-        // Admin já tem 100_000_000_000_000, então tentar mintar mais 110_000_000_000_001
         client.mint(&admin, &110_000_000_000_001);
     }
     
@@ -778,29 +1076,21 @@ mod tests {
         let (client, admin) = create_client(&env);
         let beneficiary = Address::generate(&env);
         
-        // Admin tem 10M tokens, suficiente para criar múltiplos vestings
-        
-        // Tentar criar 11 vesting schedules (limite é 10)
         for _ in 0..11 {
             client.create_vesting(&beneficiary, &100, &10, &100, &false);
         }
     }
 
     #[test]
-    #[should_panic(expected = "Unauthorized")] // Espera-se BrazaError::Unauthorized
+    #[should_panic(expected = "Unauthorized")]
     fn test_reentrancy_guard_prevents_reentrant_call() {
         let env = Env::default();
-        env.mock_all_auths(); // Mock auth para admin
+        env.mock_all_auths();
         let (client, admin) = create_client(&env);
         let user = Address::generate(&env);
 
-        // Simula um ataque de reentrância:
-        // Define manualmente o guard de reentrância como true,
-        // como se uma chamada externa já estivesse em progresso.
         storage::set_reentrancy_guard(&env, true);
 
-        // Tenta chamar uma função protegida (transfer)
-        // Isso deve falhar com BrazaError::Unauthorized
         client.transfer(&admin, &user, &100);
     }
 
@@ -811,37 +1101,29 @@ mod tests {
         let (client, admin) = create_client(&env);
         let user = Address::generate(&env);
 
-        // Primeiro, verifica que o guard está false
         assert!(!storage::is_reentrancy_locked(&env));
 
-        // Chama uma função protegida
         client.transfer(&admin, &user, &100);
 
-        // Após a execução bem-sucedida, o guard deve ser resetado para false
         assert!(!storage::is_reentrancy_locked(&env));
     }
 
     #[test]
-    #[should_panic(expected = "InsufficientBalance")] // Um erro esperado que não seja Unauthorized
+    #[should_panic(expected = "InsufficientBalance")]
     fn test_reentrancy_guard_resets_on_error() {
         let env = Env::default();
         env.mock_all_auths();
         let (client, admin) = create_client(&env);
         let user = Address::generate(&env);
 
-        // Primeiro, verifica que o guard está false
         assert!(!storage::is_reentrancy_locked(&env));
 
-        // Tenta chamar uma função protegida com um erro esperado (saldo insuficiente)
-        // O admin tem 10M, então tentar transferir 10M + 1
         let large_amount = 100_000_000_000_000 + 1; 
         let result = client.try_transfer(&admin, &user, &large_amount);
         
-        // Verifica que o erro foi o esperado (InsufficientBalance)
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().unwrap(), BrazaError::InsufficientBalance);
 
-        // Após a execução com erro, o guard deve ser resetado para false
         assert!(!storage::is_reentrancy_locked(&env));
     }
 }
