@@ -75,8 +75,7 @@ O **BRAZA** é a moeda do empreendedor brasileiro - aquele que acorda cedo, trab
 
 ### Módulos
 
-```
-braza_token/
+``` braza_token/
 ├── src/
 │   ├── lib.rs              # Entry point
 │   ├── token.rs            # Funções principais SEP-41
@@ -148,7 +147,7 @@ braza_token/
 
 ### Pré-requisitos
 
-```bash
+``` bash
 # Rust 1.75+
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
@@ -157,7 +156,11 @@ cargo install --locked stellar-cli --features opt
 
 # Soroban SDK
 rustup target add wasm32-unknown-unknown
-Instalaçãobash1234567# Clonar repositório
+
+Instalação
+``` bash
+
+# Clonar repositório
 git clone https://github.com/seu-usuario/braza-token.git
 cd braza-token/contracts/braza_token
 
@@ -168,8 +171,15 @@ git clone https://github.com/seu-usuario/braza-token.git
 cd braza-token/contracts/braza_token
 
 # Configurar ambiente
+
 cp .env.example .env
-nano .env  # Editar com suas credenciaisBuildbash12345678# Compilar e otimizar
+nano .env  
+
+# Editar com suas credenciaisBuild
+
+``` bash
+
+# Compilar e otimizar
 ./scripts/build.sh
 
 # Saída esperada:
@@ -183,7 +193,13 @@ nano .env  # Editar com suas credenciaisBuildbash12345678# Compilar e otimizar
 # [SUCCESS] Compilação concluída!
 # [INFO] Original:   16KiB
 # [INFO] Otimizado:  14KiB
-# [SUCCESS] Redução:    15%Deploybash12345678# Deploy completo (build + deploy + initialize + verify)
+# [SUCCESS] Redução:    15%
+
+Deploy
+
+``` bash
+
+# Deploy completo (build + deploy + initialize + verify)
 ./scripts/deploy-all.sh
 
 # Ou executar etapas individuais:
@@ -197,7 +213,14 @@ nano .env  # Editar com suas credenciaisBuildbash12345678# Compilar e otimizar
 ./scripts/build.sh       # Compilar
 ./scripts/deploy.sh      # Deploy
 ./scripts/initialize.sh  # Inicializar
-./scripts/verify.sh      # Verificar🧪 Próximos Passos: Testes AbrangentesRoadmap de Testes (Cobertura ~100%)1. Testes Unitários (tests/unit/)Objetivo: Testar funções individuais isoladamentebash12345678910tests/unit/
+./scripts/verify.sh      # Verificar🧪 Próximos Passos: Testes AbrangentesRoadmap de Testes (Cobertura ~100%)
+
+1. Testes Unitários (tests/unit/).
+Objetivo: Testar funções individuais isoladamente.
+
+``` bash 
+
+tests/unit/
 ├── test_token_basic.rs          # name, symbol, decimals, balance
 ├── test_transfers.rs            # transfer, transfer_from
 ├── test_allowances.rs           # approve, allowance, reset_allowance
@@ -215,7 +238,15 @@ nano .env  # Editar com suas credenciaisBuildbash12345678# Compilar e otimizar
 ├── test_admin.rs                # pause, unpause, blacklist
 ├── test_fees.rs                 # calculate_progressive_fee
 ├── test_compliance.rs           # KYC, country restrictions
-└── test_validation.rs           # Input validationsCobertura esperada: 80-90%2. Testes de Integração (tests/integration/)Objetivo: Testar interações entre módulosbash1234567tests/integration/
+└── test_validation.rs           # Input validationsCobertura esperada: 80-90%2.
+
+2. Testes de Integração (tests/integration/).
+Objetivo: Testar interações entre módulos
+
+``` bash 
+
+
+tests/integration/
 ├── test_full_lifecycle.rs       # Initialize → Transfer → Burn
 ├── test_vesting_flow.rs         # Create → Wait → Release
 ├── test_admin_flow.rs           # Pause → Unpause → Transfer
@@ -227,7 +258,14 @@ nano .env  # Editar com suas credenciaisBuildbash12345678# Compilar e otimizar
 ├── test_admin_flow.rs           # Pause → Unpause → Transfer
 ├── test_allowance_flow.rs       # Approve → Transfer_from
 ├── test_fee_collection.rs       # Transfer → Fee → Collector
-└── test_timelock_flow.rs        # Propose → Wait → ExecuteCobertura esperada: 70-80%3. Testes de Performance (tests/performance/)Objetivo: Validar limites de CPU, memória e storagebash123456tests/performance/
+└── test_timelock_flow.rs        # Propose → Wait → ExecuteCobertura esperada: 70-80%3. 
+
+3. Testes de Performance (tests/performance/).
+Objetivo: Validar limites de CPU, memória e storage
+
+``` bash
+
+tests/performance/
 ├── test_gas_limits.rs           # Medir CPU por função
 ├── test_storage_limits.rs       # Testar limites de storage
 ├── test_batch_operations.rs     # Transferências em lote
@@ -238,10 +276,17 @@ nano .env  # Editar com suas credenciaisBuildbash12345678# Compilar e otimizar
 ├── test_batch_operations.rs     # Transferências em lote
 ├── test_vesting_scale.rs        # 100+ vesting schedules
 └── test_worst_case.rs           # Cenários de pior casoMétricas:
+
 CPU: < 10M instruções por invocação
 Storage: < 100KB por entrada
 Latência: < 5s por transação
-4. Testes de Funcionalidade (tests/functional/)Objetivo: Validar requisitos de negóciobash123456tests/functional/
+
+4. Testes de Funcionalidade (tests/functional/).
+Objetivo: Validar requisitos de negócio
+
+``` bash
+
+tests/functional/
 ├── test_tokenomics.rs           # Supply, distribution, vesting
 ├── test_fee_structure.rs        # Taxas progressivas e contextuais
 ├── test_anti_concentration.rs   # Taxa para grandes holders
@@ -252,11 +297,18 @@ Latência: < 5s por transação
 ├── test_anti_concentration.rs   # Taxa para grandes holders
 ├── test_local_commerce.rs       # Taxa reduzida 0.05%
 └── test_admin_distribution.rs   # Distribuição sem taxaCenários:
+
 ✅ Supply nunca excede 21M BRAZA
 ✅ Vesting respeita cliff de 5-7 anos
 ✅ Taxas aplicadas corretamente por tier
 ✅ Admin pode distribuir sem taxa
-5. Testes de Segurança (tests/security/)Objetivo: Identificar vulnerabilidadesbash12345678tests/security/
+
+5. Testes de Segurança (tests/security/).
+Objetivo: Identificar vulnerabilidades
+
+```bash
+
+tests/security/
 ├── test_reentrancy.rs           # Ataques de reentrância
 ├── test_overflow.rs             # Overflow/underflow
 ├── test_authorization.rs        # Controle de acesso
@@ -278,7 +330,13 @@ Latência: < 5s por transação
 ❌ Flash loan attacks
 ❌ Timestamp manipulation
 ❌ DoS via storage explosion
-6. Testes Fuzzy (tests/fuzzy/)Objetivo: Encontrar edge cases com inputs aleatóriosbash12345tests/fuzzy/
+
+6. Testes Fuzzy (tests/fuzzy/).
+Objetivo: Encontrar edge cases com inputs aleatórios
+
+```bash
+
+tests/fuzzy/
 ├── fuzz_transfer.rs             # Inputs aleatórios para transfer
 ├── fuzz_mint_burn.rs            # Inputs aleatórios para mint/burn
 ├── fuzz_vesting.rs              # Inputs aleatórios para vesting
@@ -287,9 +345,21 @@ Latência: < 5s por transação
 ├── fuzz_mint_burn.rs            # Inputs aleatórios para mint/burn
 ├── fuzz_vesting.rs              # Inputs aleatórios para vesting
 └── fuzz_fees.rs                 # Inputs aleatórios para cálculo de taxasFerramentas:
+
 cargo-fuzz (libFuzzer)
 proptest (property-based testing)
-Execução:bash1cargo fuzz run fuzz_transfer -- -max_total_time=3600cargo fuzz run fuzz_transfer -- -max_total_time=36007. Testes de Cobertura (tests/coverage/)Objetivo: Medir cobertura de códigobash12345678# Instalar tarpaulin
+Execução:
+
+```bash
+
+cargo fuzz run fuzz_transfer -- -max_total_time=3600cargo fuzz run fuzz_transfer -- -max_total_time=36007.
+
+7. Testes de Cobertura (tests/coverage/).
+Objetivo: Medir cobertura de código.
+
+```bash
+
+# Instalar tarpaulin
 cargo install cargo-tarpaulin
 
 # Executar testes com cobertura
@@ -303,7 +373,14 @@ cargo install cargo-tarpaulin
 cargo tarpaulin --out Html --output-dir coverage
 
 # Visualizar relatório
-open coverage/index.htmlMeta: 95%+ de cobertura8. Testes de Regressão (tests/regression/)Objetivo: Garantir que correções não quebrem funcionalidadesbash12345tests/regression/
+open coverage/index.htmlMeta: 95%+ de cobertura.
+
+8. Testes de Regressão (tests/regression/)
+Objetivo: Garantir que correções não quebrem funcionalidades.
+
+``` bash
+
+tests/regression/
 ├── test_critical_01_fix.rs      # Validar correção CRÍTICO-01
 ├── test_critical_02_fix.rs      # Validar correção CRÍTICO-02
 ├── test_critical_03_fix.rs      # Validar correção CRÍTICO-03
@@ -311,7 +388,15 @@ open coverage/index.htmlMeta: 95%+ de cobertura8. Testes de Regressão (tests/re
 ├── test_critical_01_fix.rs      # Validar correção CRÍTICO-01
 ├── test_critical_02_fix.rs      # Validar correção CRÍTICO-02
 ├── test_critical_03_fix.rs      # Validar correção CRÍTICO-03
-└── test_high_risk_fixes.rs      # Validar correções ALTO-01 a 059. Testes End-to-End (tests/e2e/)Objetivo: Simular uso real na testnetbash12345tests/e2e/
+└── test_high_risk_fixes.rs      # Validar correções ALTO-01 a 059. Testes End-to-End (tests/e2e/)
+Objetivo: Simular uso real na testnet.
+
+``` bash
+
+9. Testes end-to-end (ponta a ponta).
+Objetivo: Verificam se todo o sistema funciona corretamente quando integrado.
+
+tests/e2e/
 ├── test_user_journey.rs         # Jornada completa do usuário
 ├── test_exchange_integration.rs # Integração com exchanges
 ├── test_wallet_integration.rs   # Integração com wallets
@@ -319,7 +404,14 @@ open coverage/index.htmlMeta: 95%+ de cobertura8. Testes de Regressão (tests/re
 ├── test_user_journey.rs         # Jornada completa do usuário
 ├── test_exchange_integration.rs # Integração com exchanges
 ├── test_wallet_integration.rs   # Integração com wallets
-└── test_mainnet_simulation.rs   # Simulação de mainnet10. Testes de Stress (tests/stress/)Objetivo: Validar comportamento sob cargabash12345tests/stress/
+└── test_mainnet_simulation.rs   # Simulação de mainnet10.
+
+10.  Testes de Stress (tests/stress/)
+Objetivo: Validar comportamento sob carga
+
+``` bash
+
+tests/stress/
 ├── test_high_volume.rs          # 1000+ transações/segundo
 ├── test_concurrent_users.rs     # 100+ usuários simultâneos
 ├── test_storage_growth.rs       # Crescimento de storage
@@ -343,10 +435,6 @@ open coverage/index.htmlMeta: 95%+ de cobertura8. Testes de Regressão (tests/re
     ├── scenarios.rs      # Cenários comuns
     └── helpers.rs        # Funções auxiliares
 
-Executar Todos os Testes
-
-bash
-
 # Testes unitários
 cargo test --lib
 
@@ -363,23 +451,9 @@ cargo fuzz run fuzz_transfer -- -max_total_time=3600
 cargo test --release --test test_performance
 
 # Todos os testes
-./scripts/run-all-tests.sh# Testes unitários
-cargo test --lib
+./scripts/run-all-tests.sh
 
-# Testes de integração
-cargo test --test '*'
-
-# Testes com cobertura
-cargo tarpaulin --out Html
-
-# Testes fuzzy (1 hora)
-cargo fuzz run fuzz_transfer -- -max_total_time=3600
-
-# Testes de performance
-cargo test --release --test test_performance
-
-# Todos os testes
-./scripts/run-all-tests.sh📋 Checklist de QualidadeAntes do Deploy em Mainnet
+📋 Checklist de Qualidade antes do Deploy em Mainnet
 
  ✅ Testes unitários (>90% cobertura)
  ✅ Testes de integração (>80% cobertura)
@@ -390,17 +464,19 @@ cargo test --release --test test_performance
  ✅ Documentação completa
  ✅ Análise formal (opcional)
 
-📄 Relatório de Auditoria Completo [blocked]
+📄 Relatório de Auditoria Completo
 🔒 Auditoria externa: Pendente
 🐛 Bug Bounty: Planejado
 📚 Documentação
-📖 Whitepaper [blocked]
-🔧 Guia de Desenvolvimento [blocked]
-🚀 Guia de Deploy [blocked]
-�� Guia de Testes [blocked]
-🔐 Análise de Segurança [blocked]
-📊 Tokenomics Detalhado [blocked]
-🤝 ContribuindoContribuições são bem-vindas! Por favor, leia nosso Guia de Contribuição [blocked].Como Contribuir
+📖 Whitepaper
+🔧 Guia de Desenvolvimento
+🚀 Guia de Deploy
+�� Guia de Testes
+🔐 Análise de Segurança
+📊 Tokenomics Detalhado
+🤝 ContribuindoContribuições são bem-vindas! Por favor, leia nosso Guia de Contribuição.
+
+Como Contribuir
 
 Fork o projeto
 Crie uma branch (git checkout -b feature/nova-funcionalidade)
@@ -408,7 +484,9 @@ Commit suas mudanças (git commit -m 'Adiciona nova funcionalidade')
 Push para a branch (git push origin feature/nova-funcionalidade)
 Abra um Pull Request
 
-📜 LicençaEste projeto está licenciado sob a Licença MIT - veja o arquivo LICENSE [blocked] para detalhes.
+📜 Licença
+
+Este projeto está licenciado sob a Licença MIT - veja o arquivo LICENSE para detalhes.
 
 👥 Equipe
 
@@ -429,5 +507,5 @@ Stellar Development Foundation
 Comunidade Soroban
 Empreendedores brasileiros
 
-🇧🇷 BRAZA - A Moeda do Empreendedor Brasileiro 
-🇧🇷Feito com ❤️ por empreendedores, para empreendedores
+🇧🇷 BRAZA - A Moeda do Empreendedor Brasileiro.
+🇧🇷 Feito com ❤️ por um empreendedor, para empreendedores.
