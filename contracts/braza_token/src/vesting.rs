@@ -46,32 +46,64 @@ pub fn calculate_releasable_amount(env: &Env, schedule: &VestingSchedule) -> i12
     vested.saturating_sub(schedule.released_amount).max(0)
 }
 
-/// Cria um novo vesting schedule
+/// Cria novo vesting schedule com proteção contra DoS
 pub fn create_vesting_schedule(
     env: &Env,
     beneficiary: &Address,
     total_amount: i128,
-    cliff_ledgers: u32,
-    duration_ledgers: u32,
-    revocable: bool,
+    start_time: u64,
+    cliff_duration: u64,
+    vesting_duration: u64,
 ) -> Result<u32, BrazaError> {
-    // CRITICAL-05: Incrementa e valida limite
+    let caller = env.invoker();
+    caller.require_auth();
+    
+    // === CHECKS ===
+    storage::bump_critical_storage(env);
+    
+    // 1. ✅ PROTEÇÃO: Verificar valor mínimo
+    if total_amount < storage::MIN_VESTING_AMOUNT {
+        return Err(BrazaError::VestingAmountTooLow);
+    }
+    
+    // 2. ✅ PROTEÇÃO: Cobrar taxa de storage
+    let storage_fee = storage::VESTING_STORAGE_FEE;
+    validation::require_sufficient_balance(env, &caller, storage_fee)?;
+    
+    // 3. ✅ PROTEÇÃO: Incrementar contador (verifica limites e cooldown)
     let schedule_id = storage::increment_vesting_count(env, beneficiary)?;
     
+    // === EFFECTS ===
+    // 4. Transferir taxa para pool de storage
+    let caller_balance = storage::get_balance(env, &caller);
+    let new_caller_balance = caller_balance
+        .checked_sub(storage_fee)
+        .ok_or(BrazaError::InsufficientBalance)?;
+    
+    storage::set_balance(env, &caller, new_caller_balance);
+    storage::add_to_storage_fee_pool(env, storage_fee);
+    
+    // 5. Criar vesting schedule
     let schedule = VestingSchedule {
         beneficiary: beneficiary.clone(),
         total_amount,
-        released_amount: 0,
-        start_ledger: env.ledger().sequence(),
-        cliff_ledgers,
-        duration_ledgers,
-        revocable,
+        claimed_amount: 0,
+        start_time,
+        cliff_duration,
+        vesting_duration,
         revoked: false,
     };
     
-    storage::set_vesting_schedule(env, beneficiary, schedule_id - 1, &schedule);
+    storage::set_vesting_schedule(env, beneficiary, schedule_id, &schedule);
     
-    Ok(schedule_id - 1)
+    // === INTERACTIONS ===
+    // 6. Emitir eventos
+    env.events().publish(
+        (symbol_short!("vest_crt"), beneficiary, &caller),
+        (schedule_id, total_amount, storage_fee),
+    );
+    
+    Ok(schedule_id)
 }
 
 /// Libera tokens de um vesting schedule

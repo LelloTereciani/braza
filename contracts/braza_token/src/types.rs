@@ -18,6 +18,10 @@ pub enum BrazaError {
     MaxVestingSchedulesExceeded = 12,
     InvalidVestingParams = 13,
     NoTokensToRelease = 14,
+    TimelockNotExpired = 15,
+    GlobalVestingLimitExceeded = 16,
+    VestingCooldownActive = 17,    
+    VestingAmountTooLow = 18,
 }
 
 #[contracttype]

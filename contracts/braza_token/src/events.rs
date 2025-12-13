@@ -75,3 +75,19 @@ pub fn emit_vesting_revoked(env: &Env, beneficiary: &Address, schedule_id: u32) 
         true,
     );
 }
+
+/// Emite evento de mint (criação de tokens)
+pub fn emit_mint(env: &Env, to: &Address, amount: i128) {
+    env.events().publish(
+        (symbol_short!("mint"), to),
+        amount,
+    );
+}
+
+/// Emite evento de burn (destruição de tokens)
+pub fn emit_burn(env: &Env, from: &Address, amount: i128) {
+    env.events().publish(
+        (symbol_short!("burn"), from),
+        amount,
+    );
+}
