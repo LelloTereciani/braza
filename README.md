@@ -418,7 +418,8 @@ tests/stress/
 ├── test_high_volume.rs          # 1000+ transações/segundo
 ├── test_concurrent_users.rs     # 100+ usuários simultâneos
 ├── test_storage_growth.rs       # Crescimento de storage
-└── test_network_congestion.rs   # Rede congestionadaEstrutura de Testes Propostatests/
+└── test_network_congestion.rs   # Rede congestionada 
+
 ├── unit/                 # Testes unitários (80-90% cobertura)
 ├── integration/          # Testes de integração (70-80% cobertura)
 ├── performance/          # Testes de performance
