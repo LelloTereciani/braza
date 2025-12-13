@@ -282,8 +282,6 @@ tests/functional/
 
 ✅ Supply nunca excede 21M BRAZA
 ✅ Vesting respeita cliff de 5-7 anos
-✅ Taxas aplicadas corretamente por tier
-✅ Admin pode distribuir sem taxa
 
 5. Testes de Segurança (tests/security/).
 Objetivo: Identificar vulnerabilidades
