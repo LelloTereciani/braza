@@ -384,12 +384,11 @@ tests/regression/
 ├── test_critical_01_fix.rs      # Validar correção CRÍTICO-01
 ├── test_critical_02_fix.rs      # Validar correção CRÍTICO-02
 ├── test_critical_03_fix.rs      # Validar correção CRÍTICO-03
-└── test_high_risk_fixes.rs      # Validar correções ALTO-01 a 05tests/regression/
+└── test_high_risk_fixes.rs      # Validar correções ALTO-01 a 05 
 ├── test_critical_01_fix.rs      # Validar correção CRÍTICO-01
 ├── test_critical_02_fix.rs      # Validar correção CRÍTICO-02
 ├── test_critical_03_fix.rs      # Validar correção CRÍTICO-03
-└── test_high_risk_fixes.rs      # Validar correções ALTO-01 a 059. Testes End-to-End (tests/e2e/)
-Objetivo: Simular uso real na testnet.
+└── test_high_risk_fixes.rs      # Validar correções ALTO-01 a 059
 
 ``` bash
 
