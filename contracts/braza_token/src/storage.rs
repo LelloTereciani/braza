@@ -512,6 +512,109 @@ pub fn get_global_vesting_usage_percentage(env: &Env) -> u32 {
 }
 
 // ============================================================================
+// SÍMBOLOS DE STORAGE (ADICIONAR APÓS OS SÍMBOLOS EXISTENTES)
+// ============================================================================
+
+/// ✅ NOVO: Símbolo para allowance
+const ALLOWANCE: Symbol = symbol_short!("allow");
+
+// ============================================================================
+// ✅ NOVO: ALLOWANCE - FUNÇÕES COMPLETAS
+// ============================================================================
+
+/// Obtém o allowance de um spender para gastar tokens de um owner
+/// 
+/// # Parâmetros:
+/// - `from`: Endereço do owner (dono dos tokens)
+/// - `spender`: Endereço autorizado a gastar
+/// 
+/// # Retorna:
+/// - Quantidade de tokens que o spender pode gastar
+/// - Retorna 0 se não houver allowance definido
+/// 
+/// # Conformidade SEP:
+/// - SEP-0041: Stellar Asset Contract padrão
+pub fn get_allowance(env: &Env, from: &Address, spender: &Address) -> i128 {
+    let key = (ALLOWANCE, from, spender);
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(0)
+}
+
+/// Define o allowance de um spender para gastar tokens de um owner
+/// 
+/// # Parâmetros:
+/// - `from`: Endereço do owner (dono dos tokens)
+/// - `spender`: Endereço autorizado a gastar
+/// - `amount`: Quantidade de tokens permitida (pode ser 0 para revogar)
+/// 
+/// # Segurança:
+/// - ✅ Usa storage persistente (não expira automaticamente)
+/// - ✅ Faz bump automático do TTL
+/// - ✅ Suporta valor 0 para revogar allowance
+/// 
+/// # Conformidade SEP:
+/// - SEP-0041: Stellar Asset Contract padrão
+pub fn set_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
+    let key = (ALLOWANCE, from, spender);
+    
+    if amount == 0 {
+        // Se amount é 0, remover a entrada (economiza storage)
+        env.storage().persistent().remove(&key);
+    } else {
+        // Definir allowance e fazer bump do TTL
+        env.storage().persistent().set(&key, &amount);
+        env.storage().persistent().extend_ttl(
+            &key,
+            CRITICAL_STORAGE_THRESHOLD,
+            CRITICAL_STORAGE_TTL,
+        );
+    }
+}
+
+/// Faz bump do TTL de um allowance existente
+/// 
+/// # Uso:
+/// - Chamado após operações que consomem allowance (transfer_from)
+/// - Garante que allowances ativos não expirem
+/// 
+/// # Nota:
+/// - Não falha se allowance não existir (operação idempotente)
+pub fn bump_allowance(env: &Env, from: &Address, spender: &Address) {
+    let key = (ALLOWANCE, from, spender);
+    
+    // Verificar se allowance existe antes de fazer bump
+    if env.storage().persistent().has(&key) {
+        env.storage().persistent().extend_ttl(
+            &key,
+            CRITICAL_STORAGE_THRESHOLD,
+            CRITICAL_STORAGE_TTL,
+        );
+    }
+}
+
+/// ✅ NOVO: Remove allowance completamente (libera storage)
+/// 
+/// # Uso:
+/// - Chamado quando allowance é zerado via approve(0)
+/// - Economiza storage ao remover entradas não utilizadas
+pub fn remove_allowance(env: &Env, from: &Address, spender: &Address) {
+    let key = (ALLOWANCE, from, spender);
+    env.storage().persistent().remove(&key);
+}
+
+/// ✅ NOVO: Verifica se existe allowance definido
+/// 
+/// # Retorna:
+/// - `true` se existe allowance > 0
+/// - `false` se não existe ou é 0
+pub fn has_allowance(env: &Env, from: &Address, spender: &Address) -> bool {
+    let key = (ALLOWANCE, from, spender);
+    env.storage().persistent().has(&key)
+}
+
+// ============================================================================
 // TESTES UNITÁRIOS
 // ============================================================================
 
@@ -669,5 +772,149 @@ mod tests {
         // 90% de uso (próximo do limite)
         env.storage().instance().set(&GLOBAL_VEST_COUNT, &((MAX_GLOBAL_VESTING_SCHEDULES * 90) / 100));
         assert!(is_near_global_vesting_limit(&env));
+    }
+}
+
+
+// ============================================================================
+// ✅ TESTES UNITÁRIOS - ALLOWANCE
+// ============================================================================
+
+#[cfg(test)]
+mod allowance_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    
+    fn setup_test_env() -> (Env, Address, Address) {
+        let env = Env::default();
+        let owner = Address::generate(&env);
+        let spender = Address::generate(&env);
+        
+        (env, owner, spender)
+    }
+    
+    #[test]
+    fn test_get_allowance_default_zero() {
+        let (env, owner, spender) = setup_test_env();
+        
+        // Allowance não definido deve retornar 0
+        assert_eq!(get_allowance(&env, &owner, &spender), 0);
+        assert!(!has_allowance(&env, &owner, &spender));
+    }
+    
+    #[test]
+    fn test_set_and_get_allowance() {
+        let (env, owner, spender) = setup_test_env();
+        
+        // Definir allowance
+        set_allowance(&env, &owner, &spender, 1000);
+        
+        // Verificar
+        assert_eq!(get_allowance(&env, &owner, &spender), 1000);
+        assert!(has_allowance(&env, &owner, &spender));
+    }
+    
+    #[test]
+    fn test_set_allowance_zero_removes_entry() {
+        let (env, owner, spender) = setup_test_env();
+        
+        // Definir allowance
+        set_allowance(&env, &owner, &spender, 1000);
+        assert!(has_allowance(&env, &owner, &spender));
+        
+        // Zerar allowance (deve remover entrada)
+        set_allowance(&env, &owner, &spender, 0);
+        assert!(!has_allowance(&env, &owner, &spender));
+        assert_eq!(get_allowance(&env, &owner, &spender), 0);
+    }
+    
+    #[test]
+    fn test_update_allowance() {
+        let (env, owner, spender) = setup_test_env();
+        
+        // Definir allowance inicial
+        set_allowance(&env, &owner, &spender, 1000);
+        assert_eq!(get_allowance(&env, &owner, &spender), 1000);
+        
+        // Atualizar allowance
+        set_allowance(&env, &owner, &spender, 2000);
+        assert_eq!(get_allowance(&env, &owner, &spender), 2000);
+    }
+    
+    #[test]
+    fn test_bump_allowance_existing() {
+        let (env, owner, spender) = setup_test_env();
+        
+        // Definir allowance
+        set_allowance(&env, &owner, &spender, 1000);
+        
+        // Bump não deve falhar
+        bump_allowance(&env, &owner, &spender);
+        
+        // Allowance deve permanecer
+        assert_eq!(get_allowance(&env, &owner, &spender), 1000);
+    }
+    
+    #[test]
+    fn test_bump_allowance_nonexistent() {
+        let (env, owner, spender) = setup_test_env();
+        
+        // Bump de allowance inexistente não deve falhar
+        bump_allowance(&env, &owner, &spender);
+        
+        // Allowance deve continuar 0
+        assert_eq!(get_allowance(&env, &owner, &spender), 0);
+    }
+    
+    #[test]
+    fn test_remove_allowance() {
+        let (env, owner, spender) = setup_test_env();
+        
+        // Definir allowance
+        set_allowance(&env, &owner, &spender, 1000);
+        assert!(has_allowance(&env, &owner, &spender));
+        
+        // Remover explicitamente
+        remove_allowance(&env, &owner, &spender);
+        
+        // Verificar remoção
+        assert!(!has_allowance(&env, &owner, &spender));
+        assert_eq!(get_allowance(&env, &owner, &spender), 0);
+    }
+    
+    #[test]
+    fn test_multiple_spenders() {
+        let (env, owner, _) = setup_test_env();
+        let spender1 = Address::generate(&env);
+        let spender2 = Address::generate(&env);
+        
+        // Definir allowances diferentes
+        set_allowance(&env, &owner, &spender1, 1000);
+        set_allowance(&env, &owner, &spender2, 2000);
+        
+        // Verificar independência
+        assert_eq!(get_allowance(&env, &owner, &spender1), 1000);
+        assert_eq!(get_allowance(&env, &owner, &spender2), 2000);
+        
+        // Modificar um não afeta o outro
+        set_allowance(&env, &owner, &spender1, 500);
+        assert_eq!(get_allowance(&env, &owner, &spender1), 500);
+        assert_eq!(get_allowance(&env, &owner, &spender2), 2000);
+    }
+    
+    #[test]
+    fn test_allowance_isolation_between_owners() {
+        let env = Env::default();
+        let owner1 = Address::generate(&env);
+        let owner2 = Address::generate(&env);
+        let spender = Address::generate(&env);
+        
+        // Definir allowances de diferentes owners para o mesmo spender
+        set_allowance(&env, &owner1, &spender, 1000);
+        set_allowance(&env, &owner2, &spender, 2000);
+        
+        // Verificar isolamento
+        assert_eq!(get_allowance(&env, &owner1, &spender), 1000);
+        assert_eq!(get_allowance(&env, &owner2, &spender), 2000);
     }
 }
