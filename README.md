@@ -31,7 +31,6 @@ O **BRAZA** é a moeda do empreendedor brasileiro - aquele que acorda cedo, trab
 | Característica | Descrição |
 |----------------|-----------|
 | 🔒 **Supply Fixo** | 21 milhões BRAZA (inspirado no Bitcoin) |
-| 💰 **Taxação Inteligente** | Progressiva e contextual |
 | 🏘️ **Economia Local** | Taxa reduzida para comércio local (0.05%) |
 | 🔐 **Segurança** | Reentrancy guard, overflow protection, pause mechanism |
 | 📊 **Vesting** | Cliff-based para alinhamento de longo prazo |
