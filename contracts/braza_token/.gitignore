@@ -65,3 +65,5 @@ temp/
 .DS_Store
 Thumbs.db
 
+# outros
+*.pdf

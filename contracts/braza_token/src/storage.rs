@@ -775,6 +775,145 @@ mod tests {
     }
 }
 
+// ============================================================================
+// SÍMBOLOS DE STORAGE (ADICIONAR APÓS OS EXISTENTES)
+// ============================================================================
+
+/// ✅ NOVO: Símbolo para saldo bloqueado em vesting
+const LOCKED_BALANCE: Symbol = symbol_short!("locked");
+
+// ============================================================================
+// ✅ NOVO: LOCKED BALANCE (VESTING)
+// ============================================================================
+
+/// Obtém o saldo total de tokens bloqueados em vesting schedules
+/// 
+/// # Retorna:
+/// - Quantidade de tokens atualmente bloqueados em vesting
+/// - Retorna 0 se não houver tokens bloqueados
+/// 
+/// # Invariante:
+/// - total_supply = circulating_supply + locked_balance
+/// - locked_balance sempre deve ser >= 0
+/// 
+/// # Uso:
+/// - Auditoria de supply
+/// - Validação de burn (não pode queimar tokens locked)
+/// - Transparência para usuários
+pub fn get_locked_balance(env: &Env) -> i128 {
+    env.storage()
+        .instance()
+        .get(&LOCKED_BALANCE)
+        .unwrap_or(0)
+}
+
+/// Define o saldo total de tokens bloqueados em vesting schedules
+/// 
+/// # Parâmetros:
+/// - `amount`: Novo saldo bloqueado (deve ser >= 0)
+/// 
+/// # Segurança:
+/// - ✅ Faz bump automático de TTL
+/// - ✅ Usado internamente apenas por create/release/revoke vesting
+/// 
+/// # Invariante:
+/// - NEVER call directly - use increment/decrement methods
+pub fn set_locked_balance(env: &Env, amount: i128) {
+    env.storage().instance().set(&LOCKED_BALANCE, &amount);
+    bump_critical_storage(env);
+}
+
+/// ✅ NOVO: Incrementa locked balance (create vesting)
+/// 
+/// # Segurança:
+/// - ✅ Verifica overflow
+/// - ✅ Emite evento de tracking
+pub fn increment_locked_balance(env: &Env, amount: i128) -> Result<i128, BrazaError> {
+    let current = get_locked_balance(env);
+    let new_locked = current
+        .checked_add(amount)
+        .ok_or(BrazaError::InvalidAmount)?;
+    
+    set_locked_balance(env, new_locked);
+    
+    // Emitir evento de tracking
+    env.events().publish(
+        (symbol_short!("lock_inc"),),
+        (amount, new_locked),
+    );
+    
+    Ok(new_locked)
+}
+
+/// ✅ NOVO: Decrementa locked balance (release/revoke vesting)
+/// 
+/// # Segurança:
+/// - ✅ Verifica underflow
+/// - ✅ Valida que locked >= amount
+/// - ✅ Emite evento de tracking
+pub fn decrement_locked_balance(env: &Env, amount: i128) -> Result<i128, BrazaError> {
+    let current = get_locked_balance(env);
+    
+    if current < amount {
+        // Emitir evento de erro
+        env.events().publish(
+            (symbol_short!("lock_err"),),
+            (amount, current),
+        );
+        return Err(BrazaError::InsufficientBalance);
+    }
+    
+    let new_locked = current
+        .checked_sub(amount)
+        .ok_or(BrazaError::InsufficientBalance)?;
+    
+    set_locked_balance(env, new_locked);
+    
+    // Emitir evento de tracking
+    env.events().publish(
+        (symbol_short!("lock_dec"),),
+        (amount, new_locked),
+    );
+    
+    Ok(new_locked)
+}
+
+/// ✅ NOVO: Retorna o supply circulante (não bloqueado)
+/// 
+/// # Cálculo:
+/// - circulating = total_supply - locked_balance
+/// 
+/// # Uso:
+/// - Métricas de mercado
+/// - Cálculo de market cap real
+pub fn get_circulating_supply(env: &Env) -> i128 {
+    let total = get_total_supply(env);
+    let locked = get_locked_balance(env);
+    
+    total.saturating_sub(locked)
+}
+
+/// ✅ NOVO: Valida que burn não afeta tokens locked
+/// 
+/// # Retorna:
+/// - Ok(()) se burn é permitido
+/// - Err se tentaria queimar tokens locked
+pub fn validate_burn_not_locked(env: &Env, burn_amount: i128) -> Result<(), BrazaError> {
+    let total_supply = get_total_supply(env);
+    let locked = get_locked_balance(env);
+    let circulating = total_supply.saturating_sub(locked);
+    
+    if burn_amount > circulating {
+        // Emitir evento de tentativa bloqueada
+        env.events().publish(
+            (symbol_short!("brn_lock"),),
+            (burn_amount, circulating, locked),
+        );
+        return Err(BrazaError::InsufficientBalance);
+    }
+    
+    Ok(())
+}
 
 // ============================================================================
 // ✅ TESTES UNITÁRIOS - ALLOWANCE
@@ -916,5 +1055,142 @@ mod allowance_tests {
         // Verificar isolamento
         assert_eq!(get_allowance(&env, &owner1, &spender), 1000);
         assert_eq!(get_allowance(&env, &owner2, &spender), 2000);
+    }
+}
+// ============================================================================
+// ✅ TESTES UNITÁRIOS - LOCKED BALANCE
+// ============================================================================
+
+#[cfg(test)]
+mod locked_balance_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    
+    fn setup_test_env() -> Env {
+        let env = Env::default();
+        
+        // Inicializar storage
+        env.storage().instance().set(&LOCKED_BALANCE, &0i128);
+        env.storage().instance().set(&SUPPLY, &100_000_000_000_000i128);
+        
+        env
+    }
+    
+    #[test]
+    fn test_get_locked_balance_default_zero() {
+        let env = Env::default();
+        
+        // Locked balance não definido deve retornar 0
+        assert_eq!(get_locked_balance(&env), 0);
+    }
+    
+    #[test]
+    fn test_set_and_get_locked_balance() {
+        let env = setup_test_env();
+        
+        // Definir locked balance
+        set_locked_balance(&env, 1000);
+        
+        // Verificar
+        assert_eq!(get_locked_balance(&env), 1000);
+    }
+    
+    #[test]
+    fn test_increment_locked_balance() {
+        let env = setup_test_env();
+        
+        // Incrementar
+        let result = increment_locked_balance(&env, 500);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 500);
+        assert_eq!(get_locked_balance(&env), 500);
+        
+        // Incrementar novamente
+        let result = increment_locked_balance(&env, 300);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 800);
+        assert_eq!(get_locked_balance(&env), 800);
+    }
+    
+    #[test]
+    fn test_decrement_locked_balance() {
+        let env = setup_test_env();
+        
+        // Definir locked balance inicial
+        set_locked_balance(&env, 1000);
+        
+        // Decrementar
+        let result = decrement_locked_balance(&env, 300);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 700);
+        assert_eq!(get_locked_balance(&env), 700);
+    }
+    
+    #[test]
+    fn test_decrement_locked_balance_insufficient() {
+        let env = setup_test_env();
+        
+        // Definir locked balance inicial
+        set_locked_balance(&env, 100);
+        
+        // Tentar decrementar mais do que tem
+        let result = decrement_locked_balance(&env, 200);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), BrazaError::InsufficientBalance);
+        
+        // Locked balance não deve ter mudado
+        assert_eq!(get_locked_balance(&env), 100);
+    }
+    
+    #[test]
+    fn test_get_circulating_supply() {
+        let env = setup_test_env();
+        
+        // Total supply = 100M, Locked = 0 -> Circulating = 100M
+        assert_eq!(get_circulating_supply(&env), 100_000_000_000_000);
+        
+        // Bloquear 10M em vesting
+        set_locked_balance(&env, 10_000_000_000_000);
+        
+        // Circulating deve ser 90M
+        assert_eq!(get_circulating_supply(&env), 90_000_000_000_000);
+    }
+    
+    #[test]
+    fn test_validate_burn_not_locked_success() {
+        let env = setup_test_env();
+        
+        // Total = 100M, Locked = 10M -> Circulating = 90M
+        set_locked_balance(&env, 10_000_000_000_000);
+        
+        // Queimar 50M (dentro do circulating) deve passar
+        let result = validate_burn_not_locked(&env, 50_000_000_000_000);
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_validate_burn_not_locked_failure() {
+        let env = setup_test_env();
+        
+        // Total = 100M, Locked = 90M -> Circulating = 10M
+        set_locked_balance(&env, 90_000_000_000_000);
+        
+        // Tentar queimar 20M (mais que circulating) deve falhar
+        let result = validate_burn_not_locked(&env, 20_000_000_000_000);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), BrazaError::InsufficientBalance);
+    }
+    
+    #[test]
+    fn test_locked_balance_overflow_protection() {
+        let env = setup_test_env();
+        
+        // Definir locked próximo do máximo
+        set_locked_balance(&env, i128::MAX - 100);
+        
+        // Tentar incrementar além do máximo
+        let result = increment_locked_balance(&env, 200);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), BrazaError::InvalidAmount);
     }
 }

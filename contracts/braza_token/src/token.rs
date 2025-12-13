@@ -257,7 +257,7 @@ impl BrazaToken {
     }
     
     // ============================================================================
-    // ✅ NOVO: SISTEMA DE ALLOWANCE COMPLETO
+    // ✅ SISTEMA DE ALLOWANCE COMPLETO
     // ============================================================================
     
     /// Aprova um spender para gastar tokens em nome do caller
@@ -474,6 +474,7 @@ impl BrazaToken {
     }
     
     /// Destrói tokens (apenas admin).
+    /// ✅ MODIFICADO: Valida que não queima tokens locked em vesting
     /// Implementa proteção contra reentrância.
     pub fn burn(
         env: Env,
@@ -495,6 +496,9 @@ impl BrazaToken {
             validation::require_not_paused(&env)?;
             validation::require_positive_amount(amount)?;
             validation::require_sufficient_balance(&env, &from, amount)?;
+            
+            // ✅ NOVO: Validar que burn não afeta tokens locked
+            storage::validate_burn_not_locked(&env, amount)?;
             
             // === EFFECTS ===
             let current_balance = storage::get_balance(&env, &from);
@@ -522,15 +526,17 @@ impl BrazaToken {
     }
     
     // ============================================================================
-    // VESTING - CRITICAL-01 CORRIGIDO
+    // VESTING - COM LOCKED BALANCE TRACKING
     // ============================================================================
     
     /// Cria um novo vesting schedule.
+    /// ✅ MODIFICADO: Rastreia locked balance
     /// Implementa proteção contra reentrância.
     /// 
     /// # Correções Implementadas:
     /// - CRITICAL-01: Usa ledger.sequence() ao invés de timestamp
     /// - CRITICAL-05: Valida limite de schedules por beneficiário
+    /// - Rastreia tokens bloqueados em vesting
     pub fn create_vesting(
         env: Env,
         beneficiary: Address,
@@ -556,14 +562,17 @@ impl BrazaToken {
             validation::require_sufficient_balance(&env, &admin, total_amount)?;
             
             // === EFFECTS ===
-            // Transferir tokens do admin para o contrato (lock)
+            // 1. Transferir tokens do admin (bloquear)
             let admin_balance = storage::get_balance(&env, &admin);
             let new_admin_balance = admin_balance
                 .checked_sub(total_amount)
                 .ok_or(BrazaError::InsufficientBalance)?;
             storage::set_balance(&env, &admin, new_admin_balance);
             
-            // Criar vesting schedule (CRITICAL-05: valida limite)
+            // 2. ✅ ADICIONAR: Incrementar locked balance
+            storage::increment_locked_balance(&env, total_amount)?;
+            
+            // 3. Criar vesting schedule (valida limite)
             let schedule_id = vesting::create_vesting_schedule(
                 &env,
                 &beneficiary,
@@ -585,6 +594,7 @@ impl BrazaToken {
     }
     
     /// Libera tokens vestidos.
+    /// ✅ MODIFICADO: Decrementa locked balance
     /// Implementa proteção contra reentrância.
     /// 
     /// # Correção CRITICAL-01:
@@ -609,18 +619,22 @@ impl BrazaToken {
             validation::require_not_paused(&env)?;
             
             // === EFFECTS ===
+            // 1. Calcular e liberar tokens
             let released_amount = vesting::release_vested_tokens(
                 &env,
                 &beneficiary,
                 schedule_id,
             )?;
             
-            // Transferir tokens para o beneficiário
+            // 2. Transferir tokens para o beneficiário
             let beneficiary_balance = storage::get_balance(&env, &beneficiary);
             let new_balance = beneficiary_balance
                 .checked_add(released_amount)
                 .ok_or(BrazaError::InvalidAmount)?;
             storage::set_balance(&env, &beneficiary, new_balance);
+            
+            // 3. ✅ ADICIONAR: Decrementar locked balance
+            storage::decrement_locked_balance(&env, released_amount)?;
             
             // === INTERACTIONS ===
             events::emit_vesting_released(&env, &beneficiary, schedule_id, released_amount);
@@ -634,6 +648,7 @@ impl BrazaToken {
     }
     
     /// Revoga um vesting schedule (apenas admin, se revocable).
+    /// ✅ MODIFICADO: Decrementa locked balance
     /// Implementa proteção contra reentrância.
     pub fn revoke_vesting(
         env: Env,
@@ -655,18 +670,22 @@ impl BrazaToken {
             validation::require_not_paused(&env)?;
             
             // === EFFECTS ===
+            // 1. Revogar vesting e calcular não-vestido
             let unvested_amount = vesting::revoke_vesting_schedule(
                 &env,
                 &beneficiary,
                 schedule_id,
             )?;
             
-            // Devolver tokens não vestidos para o admin
+            // 2. Devolver tokens não vestidos para o admin
             let admin_balance = storage::get_balance(&env, &admin);
             let new_admin_balance = admin_balance
                 .checked_add(unvested_amount)
                 .ok_or(BrazaError::InvalidAmount)?;
             storage::set_balance(&env, &admin, new_admin_balance);
+            
+            // 3. ✅ ADICIONAR: Decrementar locked balance
+            storage::decrement_locked_balance(&env, unvested_amount)?;
             
             // === INTERACTIONS ===
             events::emit_vesting_revoked(&env, &beneficiary, schedule_id);
@@ -715,6 +734,51 @@ impl BrazaToken {
             .ok_or(BrazaError::VestingNotFound)?;
         
         Ok(vesting::calculate_releasable_amount(&env, &schedule))
+    }
+    
+    // ============================================================================
+    // ✅ NOVO: FUNÇÕES DE CONSULTA - SUPPLY E LOCKED BALANCE
+    // ============================================================================
+    
+    /// ✅ NOVO: Retorna o saldo bloqueado em vesting
+    /// 
+    /// # View Function (Somente Leitura):
+    /// - Não modifica estado
+    /// - Usado para auditoria e transparência
+    pub fn get_locked_balance(env: Env) -> i128 {
+        storage::bump_critical_storage(&env);
+        storage::get_locked_balance(&env)
+    }
+    
+    /// ✅ NOVO: Retorna o supply circulante (não bloqueado)
+    /// 
+    /// # Cálculo:
+    /// - circulating = total_supply - locked_balance
+    /// 
+    /// # View Function (Somente Leitura):
+    /// - Usado para métricas de mercado
+    /// - Market cap real considera apenas circulating supply
+    pub fn get_circulating_supply(env: Env) -> i128 {
+        storage::bump_critical_storage(&env);
+        storage::get_circulating_supply(&env)
+    }
+    
+    /// ✅ NOVO: Retorna estatísticas completas de supply
+    /// 
+    /// # Retorna:
+    /// - (total_supply, locked_balance, circulating_supply, max_supply)
+    /// 
+    /// # View Function (Somente Leitura):
+    /// - Dashboard completo de supply
+    pub fn get_supply_stats(env: Env) -> (i128, i128, i128, i128) {
+        storage::bump_critical_storage(&env);
+        
+        let total = storage::get_total_supply(&env);
+        let locked = storage::get_locked_balance(&env);
+        let circulating = storage::get_circulating_supply(&env);
+        let max = storage::MAX_SUPPLY;
+        
+        (total, locked, circulating, max)
     }
     
     // ============================================================================
@@ -835,7 +899,7 @@ impl BrazaToken {
 }
 
 // ============================================================================
-// ✅ TESTES UNITÁRIOS - ALLOWANCE
+// ✅ TESTES UNITÁRIOS - ALLOWANCE E LOCKED BALANCE
 // ============================================================================
 
 #[cfg(test)]
@@ -870,7 +934,9 @@ mod tests {
         assert_eq!(client.total_supply(), 100_000_000_000_000);
     }
     
-    // ✅ NOVOS TESTES DE ALLOWANCE
+    // ========================================================================
+    // TESTES DE ALLOWANCE
+    // ========================================================================
     
     #[test]
     fn test_approve_and_allowance() {
@@ -879,10 +945,7 @@ mod tests {
         let (client, owner) = create_client(&env);
         let spender = Address::generate(&env);
         
-        // Aprovar 1000 tokens
         client.approve(&owner, &spender, &1000);
-        
-        // Verificar allowance
         assert_eq!(client.allowance(&owner, &spender), 1000);
     }
     
@@ -894,17 +957,11 @@ mod tests {
         let spender = Address::generate(&env);
         let recipient = Address::generate(&env);
         
-        // Aprovar 1000 tokens
         client.approve(&owner, &spender, &1000);
-        
-        // Transfer_from 500 tokens
         client.transfer_from(&spender, &owner, &recipient, &500);
         
-        // Verificar saldos
         assert_eq!(client.balance(&recipient), 500);
         assert_eq!(client.balance(&owner), 100_000_000_000_000 - 500);
-        
-        // Verificar allowance restante
         assert_eq!(client.allowance(&owner, &spender), 500);
     }
     
@@ -917,10 +974,7 @@ mod tests {
         let spender = Address::generate(&env);
         let recipient = Address::generate(&env);
         
-        // Aprovar apenas 500 tokens
         client.approve(&owner, &spender, &500);
-        
-        // Tentar transferir 1000 (deve falhar)
         client.transfer_from(&spender, &owner, &recipient, &1000);
     }
     
@@ -933,7 +987,6 @@ mod tests {
         let spender = Address::generate(&env);
         let recipient = Address::generate(&env);
         
-        // Tentar transfer_from sem allowance
         client.transfer_from(&spender, &owner, &recipient, &500);
     }
     
@@ -944,13 +997,8 @@ mod tests {
         let (client, owner) = create_client(&env);
         let spender = Address::generate(&env);
         
-        // Aprovar 1000
         client.approve(&owner, &spender, &1000);
-        
-        // Aumentar 500
         client.increase_allowance(&owner, &spender, &500);
-        
-        // Verificar total
         assert_eq!(client.allowance(&owner, &spender), 1500);
     }
     
@@ -961,13 +1009,8 @@ mod tests {
         let (client, owner) = create_client(&env);
         let spender = Address::generate(&env);
         
-        // Aprovar 1000
         client.approve(&owner, &spender, &1000);
-        
-        // Diminuir 300
         client.decrease_allowance(&owner, &spender, &300);
-        
-        // Verificar restante
         assert_eq!(client.allowance(&owner, &spender), 700);
     }
     
@@ -978,16 +1021,152 @@ mod tests {
         let (client, owner) = create_client(&env);
         let spender = Address::generate(&env);
         
-        // Aprovar 1000
         client.approve(&owner, &spender, &1000);
         assert_eq!(client.allowance(&owner, &spender), 1000);
         
-        // Revogar (aprovar 0)
         client.approve(&owner, &spender, &0);
         assert_eq!(client.allowance(&owner, &spender), 0);
     }
     
+    // ========================================================================
+    // ✅ NOVOS TESTES DE LOCKED BALANCE
+    // ========================================================================
+    
+    #[test]
+    fn test_create_vesting_increments_locked() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let (client, _admin) = create_client(&env);
+        let beneficiary = Address::generate(&env);
+        
+        // Locked balance inicial deve ser 0
+        assert_eq!(client.get_locked_balance(), 0);
+        
+        // Criar vesting de 1000 tokens
+        client.create_vesting(&beneficiary, &1000, &100, &1000, &false);
+        
+        // Locked balance deve ser 1000
+        assert_eq!(client.get_locked_balance(), 1000);
+        
+        // Circulating supply deve ter reduzido
+        let (total, locked, circulating, _) = client.get_supply_stats();
+        assert_eq!(locked, 1000);
+        assert_eq!(circulating, total - 1000);
+    }
+    
+    #[test]
+    fn test_release_vested_decrements_locked() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let (client, _admin) = create_client(&env);
+        let beneficiary = Address::generate(&env);
+        
+        // Criar vesting
+        let schedule_id = client.create_vesting(&beneficiary, &1000, &100, &1000, &false);
+        assert_eq!(client.get_locked_balance(), 1000);
+        
+        // Avançar para liberar 50% (500 tokens)
+        env.ledger().set_sequence_number(500);
+        
+        // Release vested
+        let released = client.release_vested(&beneficiary, &schedule_id);
+        assert_eq!(released, 500);
+        
+        // Locked balance deve ter reduzido para 500
+        assert_eq!(client.get_locked_balance(), 500);
+    }
+    
+    #[test]
+    fn test_revoke_vesting_decrements_locked() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let (client, _admin) = create_client(&env);
+        let beneficiary = Address::generate(&env);
+        
+        // Criar vesting revocable
+        let schedule_id = client.create_vesting(&beneficiary, &1000, &100, &1000, &true);
+        assert_eq!(client.get_locked_balance(), 1000);
+        
+        // Revogar vesting
+        let unvested = client.revoke_vesting(&beneficiary, &schedule_id);
+        assert_eq!(unvested, 1000);
+        
+        // Locked balance deve voltar para 0
+        assert_eq!(client.get_locked_balance(), 0);
+    }
+    
+    #[test]
+    #[should_panic(expected = "InsufficientBalance")]
+    fn test_burn_cannot_affect_locked_tokens() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let (client, admin) = create_client(&env);
+        let beneficiary = Address::generate(&env);
+        
+        // Bloquear 90M tokens em vesting
+        client.create_vesting(&beneficiary, &90_000_000_000_000, &100, &1000, &false);
+        
+        // Tentar queimar 20M tokens (mais que os 10M circulating)
+        // Deve falhar porque tentaria queimar tokens locked
+        client.burn(&admin, &20_000_000_000_000);
+    }
+    
+    #[test]
+    fn test_burn_allows_circulating_tokens_only() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let (client, admin) = create_client(&env);
+        let beneficiary = Address::generate(&env);
+        
+        let initial_supply = client.total_supply();
+        
+        // Bloquear 90M tokens em vesting
+        client.create_vesting(&beneficiary, &90_000_000_000_000, &100, &1000, &false);
+        
+        // Queimar 5M tokens (dentro dos 10M circulating) deve passar
+        client.burn(&admin, &5_000_000_000_000);
+        
+        // Verificar que supply reduziu mas locked permaneceu
+        let (total, locked, circulating, _) = client.get_supply_stats();
+        assert_eq!(total, initial_supply - 5_000_000_000_000);
+        assert_eq!(locked, 90_000_000_000_000);
+        assert_eq!(circulating, 5_000_000_000_000); // 10M - 5M = 5M
+    }
+    
+    #[test]
+    fn test_get_supply_stats() {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        let (client, _admin) = create_client(&env);
+        let beneficiary = Address::generate(&env);
+        
+        // Estado inicial
+        let (total, locked, circulating, max) = client.get_supply_stats();
+        assert_eq!(total, 100_000_000_000_000); // 10M inicial
+        assert_eq!(locked, 0);
+        assert_eq!(circulating, 100_000_000_000_000);
+        assert_eq!(max, 210_000_000_000_000); // 21M máximo
+        
+        // Criar vesting
+        client.create_vesting(&beneficiary, &30_000_000_000_000, &100, &1000, &false);
+        
+        // Verificar novamente
+        let (total2, locked2, circulating2, max2) = client.get_supply_stats();
+        assert_eq!(total2, 100_000_000_000_000); // Total não muda
+        assert_eq!(locked2, 30_000_000_000_000); // 3M locked
+        assert_eq!(circulating2, 70_000_000_000_000); // 7M circulating
+        assert_eq!(max2, 210_000_000_000_000); // Max permanece
+    }
+    
+    // ========================================================================
     // TESTES EXISTENTES (mantidos)
+    // ========================================================================
     
     #[test]
     fn test_initial_supply_and_max_supply() {
@@ -1033,7 +1212,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         
-        let (client, admin) = create_client(&env);
+        let (client, _admin) = create_client(&env);
         let beneficiary = Address::generate(&env);
         
         let schedule_id = client.create_vesting(&beneficiary, &1000, &100, &1000, &false);
@@ -1073,7 +1252,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         
-        let (client, admin) = create_client(&env);
+        let (client, _admin) = create_client(&env);
         let beneficiary = Address::generate(&env);
         
         for _ in 0..11 {

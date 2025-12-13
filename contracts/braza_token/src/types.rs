@@ -61,6 +61,7 @@ pub enum BrazaError {
     
     /// Valor de vesting abaixo do mínimo de 1 BRZ
     VestingAmountTooLow = 18,
+
     
     /// ✅ NOVO: Allowance insuficiente para transfer_from
     /// 
