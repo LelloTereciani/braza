@@ -191,3 +191,15 @@ pub fn get_all_vesting_schedules(env: &Env, beneficiary: &Address) -> Vec<Vestin
     
     schedules
 }
+
+// ============================================================================
+// Reentrancy Guard
+// ============================================================================
+
+pub fn set_reentrancy_guard(env: &Env, locked: bool) {
+    env.storage().instance().set(&symbol_short!("reent_lock"), &locked);
+}
+
+pub fn is_reentrancy_locked(env: &Env) -> bool {
+    env.storage().instance().get(&symbol_short!("reent_lock")).unwrap_or(false)
+}
