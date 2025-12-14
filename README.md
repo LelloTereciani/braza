@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 [![Testnet](https://img.shields.io/badge/Testnet-Deployed-success)](https://stellar.expert/explorer/testnet/contract/CCJP3TAZR7Q5E2RQ4QRQ5O3VXOMDRTIN2PURYJCSLCAXFX5I3BY34RLK)
 
-> A moeda regional que representa o empreendedor brasileiro que produz e move a economia real.
+A moeda regional que representa o empreendedor brasileiro que produz e move a economia real.
 
 BRAZA é um **token SEP‑41 avançado**, desenvolvido em **Rust + Soroban**, com governança, compliance, vesting, segurança reforçada e regras de supply inspiradas no Bitcoin.
 
