@@ -1,9 +1,9 @@
+#![allow(dead_code)]
 use soroban_sdk::{contracttype, contracterror, String};
 
 // ============================================================================
 // ERROS DO CONTRATO
 // ============================================================================
-
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -60,13 +60,10 @@ pub struct VestingSchedule {
     pub revoked: bool,
 }
 
-// ============================================================================
-// TESTES
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::{Env, Address, String};  // <- Imports necessários para o teste
 
     #[test]
     fn test_error_ordering() {
@@ -97,13 +94,11 @@ mod tests {
 
     #[test]
     fn test_vesting_schedule_clone() {
-        use soroban_sdk::{Env, Address};
-
         let env = Env::default();
-        let addr = Address::generate(&env);
+        let addr = Address::from_string(&String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"));  // <- Atribuído a addr
 
         let s = VestingSchedule {
-            beneficiary: addr.clone(),
+            beneficiary: addr.clone(),  // <- Agora addr existe e pode ser clonado
             total_amount: 1000,
             released_amount: 0,
             start_ledger: 0,

@@ -1,6 +1,5 @@
 use soroban_sdk::{Address, Env, symbol_short};
 
-//
 // EVENTOS DO TOKEN
 //
 
@@ -91,60 +90,92 @@ pub fn emit_vesting_revoked(env: &Env, beneficiary: &Address, schedule_id: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{
+        Env,
+        testutils::{Events as _, Address as _},
+    };
 
     #[test]
     fn test_emit_transfer() {
         let env = Env::default();
-        let a = Address::generate(&env);
-        let b = Address::generate(&env);
-        emit_transfer(&env, &a, &b, 1000);
+        let contract_id = env.register_contract(None, crate::BrazaToken);
+        
+        env.as_contract(&contract_id, || {
+            let a = Address::generate(&env);
+            let b = Address::generate(&env);
+            emit_transfer(&env, &a, &b, 1000);
+        });
+        
         assert_eq!(env.events().all().len(), 1);
     }
 
     #[test]
     fn test_approval() {
         let env = Env::default();
-        let o = Address::generate(&env);
-        let s = Address::generate(&env);
-        emit_approval(&env, &o, &s, 50);
+        let contract_id = env.register_contract(None, crate::BrazaToken);
+        
+        env.as_contract(&contract_id, || {
+            let o = Address::generate(&env);
+            let s = Address::generate(&env);
+            emit_approval(&env, &o, &s, 50);
+        });
+        
         assert_eq!(env.events().all().len(), 1);
     }
 
     #[test]
     fn test_burn() {
         let env = Env::default();
-        let a = Address::generate(&env);
-        emit_burn(&env, &a, 33);
+        let contract_id = env.register_contract(None, crate::BrazaToken);
+        
+        env.as_contract(&contract_id, || {
+            let a = Address::generate(&env);
+            emit_burn(&env, &a, 33);
+        });
+        
         assert_eq!(env.events().all().len(), 1);
     }
 
     #[test]
     fn test_pause_unpause() {
         let env = Env::default();
-        emit_pause(&env);
-        emit_unpause(&env);
+        let contract_id = env.register_contract(None, crate::BrazaToken);
+        
+        env.as_contract(&contract_id, || {
+            emit_pause(&env);
+            emit_unpause(&env);
+        });
+        
         assert_eq!(env.events().all().len(), 2);
     }
 
     #[test]
     fn test_blacklist() {
         let env = Env::default();
-        let a = Address::generate(&env);
-        emit_blacklist(&env, &a, true);
-        emit_blacklist(&env, &a, false);
+        let contract_id = env.register_contract(None, crate::BrazaToken);
+        
+        env.as_contract(&contract_id, || {
+            let a = Address::generate(&env);
+            emit_blacklist(&env, &a, true);
+            emit_blacklist(&env, &a, false);
+        });
+        
         assert_eq!(env.events().all().len(), 2);
     }
 
     #[test]
     fn test_vesting() {
         let env = Env::default();
-        let b = Address::generate(&env);
+        let contract_id = env.register_contract(None, crate::BrazaToken);
+        
+        env.as_contract(&contract_id, || {
+            let b = Address::generate(&env);
 
-        emit_vesting_created(&env, &b, 1, 1000);
-        emit_vesting_released(&env, &b, 1, 500);
-        emit_vesting_revoked(&env, &b, 1);
-
+            emit_vesting_created(&env, &b, 1, 1000);
+            emit_vesting_released(&env, &b, 1, 500);
+            emit_vesting_revoked(&env, &b, 1);
+        });
+        
         assert_eq!(env.events().all().len(), 3);
     }
 }

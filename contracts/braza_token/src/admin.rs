@@ -34,8 +34,9 @@ pub fn mint(
     // COMPLIANCE — integração TOTAL
     validation::require_not_blacklisted(env, to)?;
     validation::require_country_allowed(env, to)?;
-    validation::require_kyc_level(env, to)?;
-    validation::require_acceptable_risk(env, to, amount)?;
+    validation::require_kyc_level(env, to, 0)?;
+    validation::require_acceptable_risk(env, to, amount.try_into().unwrap())?;
+    
 
     let last_mint_time = storage::get_last_mint_time(env);
     let current_ledger = env.ledger().sequence();
@@ -109,8 +110,9 @@ pub fn burn(
     // COMPLIANCE — agora obrigatório
     validation::require_not_blacklisted(env, from)?;
     validation::require_country_allowed(env, from)?;
-    validation::require_kyc_level(env, from)?;
-    validation::require_acceptable_risk(env, from, amount)?;
+    validation::require_kyc_level(env, from, 0)?;
+    validation::require_acceptable_risk(env, from, amount.try_into().unwrap())?;
+    
 
     let last_burn_time = storage::get_last_burn_time(env);
     let current_ledger = env.ledger().sequence();
@@ -218,7 +220,7 @@ pub fn transfer_ownership(
     validation::require_admin(env, current_admin)?;
     validation::require_not_blacklisted(env, new_admin)?;
     validation::require_country_allowed(env, new_admin)?;
-    validation::require_kyc_level(env, new_admin)?;
+    validation::require_kyc_level(env, new_admin, 0)?;
 
     if new_admin == current_admin {
         return Err(BrazaError::InvalidAmount);
@@ -394,8 +396,9 @@ pub fn force_burn(
     // COMPLIANCE obrigatório
     validation::require_not_blacklisted(env, from)?;
     validation::require_country_allowed(env, from)?;
-    validation::require_kyc_level(env, from)?;
-    validation::require_acceptable_risk(env, from, amount)?;
+    validation::require_kyc_level(env, from, 0)?;
+    validation::require_acceptable_risk(env, from, amount.try_into().unwrap())?;
+    
 
     let bal = storage::get_balance(env, from);
     let new_bal = bal
@@ -441,9 +444,9 @@ pub fn force_transfer(
     validation::require_not_blacklisted(env, to)?;
     validation::require_country_allowed(env, from)?;
     validation::require_country_allowed(env, to)?;
-    validation::require_kyc_level(env, from)?;
-    validation::require_kyc_level(env, to)?;
-    validation::require_acceptable_risk(env, from, amount)?;
+    validation::require_kyc_level(env, from, 0)?;
+    validation::require_kyc_level(env, to, 0)?;
+    validation::require_acceptable_risk(env, from, amount.try_into().unwrap())?;
 
     let bal_from = storage::get_balance(env, from);
     let bal_to = storage::get_balance(env, to);

@@ -1,6 +1,14 @@
 use soroban_sdk::{Address, Env};
 use crate::storage;
 use crate::types::BrazaError;
+use crate::compliance::{
+    get_country_code,
+    is_country_blocked,
+    get_kyc_level,
+    get_risk_score,
+};
+
+
 
 // ============================================================================
 // VALIDAÇÕES — CORRIGIDO E REFORÇADO (CEI + COMPLIANCE)
@@ -93,11 +101,11 @@ pub fn require_valid_vesting_params(
 
 /// País permitido
 pub fn require_country_allowed(env: &Env, user: &Address) -> Result<(), BrazaError> {
-    if let Some(country) = storage::get_country_code(env, user) {
-        if country.len() == 0 {
+    if let Some(country) = get_country_code(env, user) {
+        if country.is_empty() {
             return Err(BrazaError::Unauthorized);
         }
-        if storage::is_country_blocked(env, country) {
+        if is_country_blocked(env, country) {
             return Err(BrazaError::Unauthorized);
         }
     }
@@ -106,7 +114,7 @@ pub fn require_country_allowed(env: &Env, user: &Address) -> Result<(), BrazaErr
 
 /// KYC mínimo (0-3)
 pub fn require_kyc_level(env: &Env, user: &Address, min_level: u32) -> Result<(), BrazaError> {
-    let lvl = storage::get_kyc_level(env, user);
+    let lvl = get_kyc_level(env, user);
     if lvl < min_level {
         return Err(BrazaError::Unauthorized);
     }
@@ -115,7 +123,7 @@ pub fn require_kyc_level(env: &Env, user: &Address, min_level: u32) -> Result<()
 
 /// Risco (AML)
 pub fn require_acceptable_risk(env: &Env, user: &Address, max_allowed: u32) -> Result<(), BrazaError> {
-    let risk = storage::get_risk_score(env, user);
+    let risk = get_risk_score(env, user);
     if risk > max_allowed {
         return Err(BrazaError::Unauthorized);
     }

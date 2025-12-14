@@ -1,5 +1,5 @@
 #![no_std]
-
+#![allow(dead_code)]
 use soroban_sdk::contract;
 
 mod storage;
@@ -20,3 +20,5 @@ pub struct BrazaTokenContract;
 
 pub use token::BrazaToken;
 pub use types::*;
+
+
