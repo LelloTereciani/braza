@@ -1,5 +1,5 @@
 # =====================================================================
-# 🚀 BRAZA TOKEN - MAKEFILE OFICIAL (COM CORES 🎨)
+# 🚀 BRAZA TOKEN - MAKEFILE OFICIAL (AUDIT EDITION 🛡️)
 # =====================================================================
 
 # Cores ANSI
@@ -7,13 +7,15 @@ GREEN  := \033[32m
 YELLOW := \033[33m
 BLUE   := \033[34m
 CYAN   := \033[36m
-MAG	:= \033[35m
-RED	:= \033[31m
+MAG    := \033[35m
+RED    := \033[31m
 RESET  := \033[0m
 
 CONTRACT_NAME := braza_token
 TARGET := wasm32-unknown-unknown
-WASM_PATH := target/$(TARGET)/release/$(CONTRACT_NAME).wasm
+WASM_DIR := target/$(TARGET)/release
+WASM_FILE := $(WASM_DIR)/$(CONTRACT_NAME).wasm
+OPTIMIZED_WASM := $(WASM_DIR)/$(CONTRACT_NAME).optimized.wasm
 
 # 🌐 Rede
 NETWORK := testnet
@@ -22,32 +24,53 @@ NETWORK := testnet
 SCRIPTS := ./scripts
 
 # =====================================================================
-# 🔨 BUILD
+# 🔨 BUILD & OPTIMIZE
 # =====================================================================
 
 .PHONY: build
 build:
-	@echo "$(BLUE)🔨 Compilando contrato...$(RESET)"
+	@echo "$(BLUE)🔨 Compilando contrato (Release)...$(RESET)"
 	cargo build --release --target $(TARGET)
-	@echo "$(GREEN)✔ Build concluído: $(WASM_PATH)$(RESET)"
+	@echo "$(GREEN)✔ Build concluído: $(WASM_FILE)$(RESET)"
 
 .PHONY: optimize
 optimize:
-	@echo "$(MAG)✨ Otimizando WASM...$(RESET)"
-	wasm-opt -Oz $(WASM_PATH) -o $(WASM_PATH)
-	@echo "$(GREEN)✔ Otimização concluída!$(RESET)"
+	@echo "$(MAG)✨ Otimizando WASM (Soroban Native)...$(RESET)"
+	soroban contract optimize --wasm $(WASM_FILE)
+	@echo "$(GREEN)✔ Otimização concluída: $(OPTIMIZED_WASM)$(RESET)"
+	@ls -lh $(OPTIMIZED_WASM)
 
-.PHONY: build-opt
-build-opt: build optimize
-	@echo "$(CYAN)🏁 Build + Otimização completos!$(RESET)"
+.PHONY: all
+all: build optimize
+	@echo "$(CYAN)🏁 Build + Otimização completos! Pronto para Deploy.$(RESET)"
+
+# =====================================================================
+# 🧪 TESTES (AUDITORIA)
+# =====================================================================
+
+.PHONY: test
+test:
+	@echo "$(MAG)🧪 Rodando Testes Unitários e de Integração...$(RESET)"
+	cargo test
+	@echo "$(GREEN)✔ Todos os testes passaram!$(RESET)"
+
+.PHONY: test-fuzz
+test-fuzz:
+	@echo "$(RED)🔥 Rodando Testes de Estresse (Fuzzing)...$(RESET)"
+	cargo test --test fuzz_proptest
+	@echo "$(GREEN)✔ O contrato sobreviveu ao caos!$(RESET)"
+
+.PHONY: audit
+audit: test test-fuzz
+	@echo "$(CYAN)🛡️  AUDITORIA COMPLETA: APROVADA$(RESET)"
 
 # =====================================================================
 # 🚀 DEPLOY
 # =====================================================================
 
 .PHONY: deploy
-deploy: build-opt
-	@echo "$(CYAN)📦 Iniciando deploy...$(RESET)"
+deploy: all
+	@echo "$(CYAN)📦 Iniciando deploy na $(NETWORK)...$(RESET)"
 	$(SCRIPTS)/deploy.sh
 
 .PHONY: initialize
@@ -59,11 +82,6 @@ initialize:
 verify:
 	@echo "$(CYAN)🔍 Verificando contrato...$(RESET)"
 	$(SCRIPTS)/verify.sh
-
-.PHONY: deploy-all
-deploy-all:
-	@echo "$(CYAN)🚀 Executando pipeline completo: build → deploy → init → verify$(RESET)"
-	$(SCRIPTS)/deploy-all.sh
 
 # =====================================================================
 # 🎨 FORMAT / LINT
@@ -82,20 +100,6 @@ lint:
 	@echo "$(GREEN)✔ Lint concluído sem warnings$(RESET)"
 
 # =====================================================================
-# 🧪 TESTES
-# =====================================================================
-
-.PHONY: test
-test:
-	@echo "$(RED)⚠ Testes ainda serão implementados.$(RESET)"
-	# cargo test
-
-.PHONY: test-int
-test-int:
-	@echo "$(RED)⚠ Testes de integração ainda serão implementados.$(RESET)"
-	# cargo test --test '*'
-
-# =====================================================================
 # 🛠️ UTILIDADES
 # =====================================================================
 
@@ -110,7 +114,8 @@ info:
 	@echo "$(CYAN)📌 Informações do Projeto:$(RESET)"
 	@echo "   • Contrato: $(CONTRACT_NAME)"
 	@echo "   • Rede: $(NETWORK)"
-	@echo "   • WASM: $(WASM_PATH)"
+	@echo "   • WASM Original: $(WASM_FILE)"
+	@echo "   • WASM Otimizado: $(OPTIMIZED_WASM)"
 
 # =====================================================================
 # ❓ AJUDA
@@ -121,22 +126,17 @@ help:
 	@echo ""
 	@echo "$(GREEN)📘 BRAZA TOKEN - Comandos Disponíveis$(RESET)"
 	@echo ""
-	@echo "$(BLUE)🔨 build$(RESET)		   → Compila o contrato"
-	@echo "$(BLUE)⚙ optimize$(RESET)		→ Otimiza o WASM"
-	@echo "$(BLUE)🚀 build-opt$(RESET)	   → Build + otimização"
+	@echo "$(BLUE)🔨 make build$(RESET)      → Compila o contrato"
+	@echo "$(BLUE)⚙ make optimize$(RESET)   → Otimiza o WASM (Gera .optimized.wasm)"
+	@echo "$(BLUE)🚀 make all$(RESET)        → Build + Otimização (Recomendado)"
 	@echo ""
-	@echo "$(CYAN)📦 deploy$(RESET)		  → Deploy do contrato"
-	@echo "$(CYAN)🧭 initialize$(RESET)	  → Inicializar contrato"
-	@echo "$(CYAN)🔍 verify$(RESET)		  → Verificar deploy"
-	@echo "$(CYAN)🚀 deploy-all$(RESET)	  → Pipeline completo"
+	@echo "$(MAG)🧪 make test$(RESET)       → Roda testes padrão (Unitários/Integração)"
+	@echo "$(RED)🔥 make test-fuzz$(RESET)  → Roda testes de estresse (Proptest)"
+	@echo "$(CYAN)🛡️  make audit$(RESET)      → Roda TUDO (Testes + Fuzzing)"
 	@echo ""
-	@echo "$(YELLOW)🎨 fmt$(RESET)			 → Formatador Rust"
-	@echo "$(YELLOW)🧹 lint$(RESET)			→ Clippy (warning = erro)"
-	@echo "$(YELLOW)🗑 clean$(RESET)		   → Limpar target/"
-	@echo "$(YELLOW)ℹ info$(RESET)			→ Exibir informações"
+	@echo "$(CYAN)📦 make deploy$(RESET)     → Deploy do contrato otimizado"
 	@echo ""
-	@echo "$(MAG)🧪 test$(RESET)			 → Testes unitários (futuro)"
-	@echo "$(MAG)🧪 test-int$(RESET)		 → Testes de integração (futuro)"
-	@echo ""
-	@echo "$(GREEN)❓ help$(RESET)			→ Exibe esta ajuda"
+	@echo "$(YELLOW)🎨 make fmt$(RESET)       → Formatador Rust"
+	@echo "$(YELLOW)🧹 make lint$(RESET)      → Clippy (Check de qualidade)"
+	@echo "$(YELLOW)🗑 make clean$(RESET)     → Limpar target/"
 	@echo ""

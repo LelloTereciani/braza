@@ -1,12 +1,12 @@
-use soroban_sdk::{Address, Env, Vec, Symbol, symbol_short};
-use crate::types::{TokenMetadata, VestingSchedule, BrazaError};
+use crate::types::{BrazaError, TokenMetadata, VestingSchedule};
+use soroban_sdk::{symbol_short, Address, Env, Symbol, Vec};
 
 // ---------------------------
 // CONSTANTES
 // ---------------------------
-pub const MAX_SUPPLY: i128 = 210_000_000_000_000;
-pub const INITIAL_SUPPLY: i128 = 100_000_000_000_000;
-pub const MAX_VESTING_SCHEDULES: u32 = 10;
+pub const MAX_SUPPLY: i128 = 2_100_000_000_000_000; // 210 milhões BRZ
+pub const INITIAL_SUPPLY: i128 = 1_000_000_000_000_000; // 100 milhões BRZ
+pub const MAX_VESTING_SCHEDULES: u32 = 50;
 pub const MAX_GLOBAL_VESTING_SCHEDULES: u32 = 10_000;
 pub const VESTING_STORAGE_FEE: i128 = 1_000_000;
 pub const MIN_VESTING_AMOUNT: i128 = 10_000_000;
@@ -16,8 +16,6 @@ pub const CRITICAL_STORAGE_THRESHOLD: u32 = 518_400;
 pub const LEDGER_THRESHOLD_SHARED: u32 = 518_400;
 pub const LEDGER_BUMP_SHARED: u32 = 6_307_200;
 
-const TEST_CONTRACT_ID_STR: &str = "CBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHF";
-
 // ---------------------------
 // TTL FUNCTIONS
 // ---------------------------
@@ -26,6 +24,7 @@ pub fn bump_critical_storage(env: &Env) {
         .instance()
         .extend_ttl(CRITICAL_STORAGE_THRESHOLD, CRITICAL_STORAGE_TTL);
 }
+
 const ADMIN: Symbol = symbol_short!("admin");
 const PAUSED: Symbol = symbol_short!("paused");
 const SUPPLY: Symbol = symbol_short!("supply");
@@ -52,6 +51,7 @@ pub fn bump_balance(env: &Env, addr: &Address) {
         .persistent()
         .extend_ttl(&key, CRITICAL_STORAGE_THRESHOLD, CRITICAL_STORAGE_TTL);
 }
+
 // METADATA
 pub fn get_metadata(env: &Env) -> TokenMetadata {
     env.storage().instance().get(&METADATA).unwrap()
@@ -69,6 +69,7 @@ pub fn set_blacklisted(env: &Env, addr: &Address, val: bool) {
     let key = (BLACKLIST, addr);
     env.storage().persistent().set(&key, &val);
 }
+
 // VESTING COUNT
 pub fn get_vesting_count(env: &Env, beneficiary: &Address) -> u32 {
     let key = (VEST_CNT, beneficiary);
@@ -76,21 +77,13 @@ pub fn get_vesting_count(env: &Env, beneficiary: &Address) -> u32 {
 }
 
 // GET SINGLE VESTING
-pub fn get_vesting_schedule(
-    env: &Env,
-    beneficiary: &Address,
-    id: u32,
-) -> Option<VestingSchedule> {
+pub fn get_vesting_schedule(env: &Env, beneficiary: &Address, id: u32) -> Option<VestingSchedule> {
     let key = (VESTING, beneficiary, id);
     env.storage().persistent().get(&key)
 }
+
 // SET VESTING
-pub fn set_vesting_schedule(
-    env: &Env,
-    beneficiary: &Address,
-    id: u32,
-    schedule: &VestingSchedule,
-) {
+pub fn set_vesting_schedule(env: &Env, beneficiary: &Address, id: u32, schedule: &VestingSchedule) {
     let key = (VESTING, beneficiary, id);
     env.storage().persistent().set(&key, schedule);
 }
@@ -100,6 +93,7 @@ pub fn remove_vesting_schedule(env: &Env, beneficiary: &Address, id: u32) {
     let key = (VESTING, beneficiary, id);
     env.storage().persistent().remove(&key);
 }
+
 // GET ALL VESTINGS
 pub fn get_all_vesting_schedules(env: &Env, beneficiary: &Address) -> Vec<VestingSchedule> {
     let count = get_vesting_count(env, beneficiary);
@@ -112,9 +106,13 @@ pub fn get_all_vesting_schedules(env: &Env, beneficiary: &Address) -> Vec<Vestin
     }
     v
 }
+
 // GLOBAL COUNT
 pub fn get_global_vesting_count(env: &Env) -> u32 {
-    env.storage().instance().get(&GLOBAL_VEST_COUNT).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&GLOBAL_VEST_COUNT)
+        .unwrap_or(0)
 }
 
 fn increment_global_vesting_count(env: &Env) {
@@ -122,12 +120,14 @@ fn increment_global_vesting_count(env: &Env) {
     env.storage().instance().set(&GLOBAL_VEST_COUNT, &(c + 1));
 }
 
+#[allow(dead_code)]
 fn decrement_global_vesting_count(env: &Env) {
     let c = get_global_vesting_count(env);
     if c > 0 {
         env.storage().instance().set(&GLOBAL_VEST_COUNT, &(c - 1));
     }
 }
+
 // STORAGE FEE POOL
 pub fn get_storage_fee_pool(env: &Env) -> i128 {
     env.storage().instance().get(&STORAGE_FEE_POOL).unwrap_or(0)
@@ -141,10 +141,15 @@ pub fn add_to_storage_fee_pool(env: &Env, amount: i128) {
 
 pub fn withdraw_from_storage_fee_pool(env: &Env, amount: i128) -> Result<(), BrazaError> {
     let cur = get_storage_fee_pool(env);
-    if amount > cur { return Err(BrazaError::InsufficientBalance); }
-    env.storage().instance().set(&STORAGE_FEE_POOL, &(cur - amount));
+    if amount > cur {
+        return Err(BrazaError::InsufficientBalance);
+    }
+    env.storage()
+        .instance()
+        .set(&STORAGE_FEE_POOL, &(cur - amount));
     Ok(())
 }
+
 // ALLOWANCE — GET
 pub fn get_allowance(env: &Env, from: &Address, spender: &Address) -> i128 {
     let key = (ALLOWANCE, from, spender);
@@ -156,6 +161,7 @@ pub fn has_allowance(env: &Env, from: &Address, spender: &Address) -> bool {
     let key = (ALLOWANCE, from, spender);
     env.storage().persistent().has(&key)
 }
+
 // SET ALLOWANCE
 pub fn set_allowance(env: &Env, from: &Address, spender: &Address, amount: i128) {
     let key = (ALLOWANCE, from, spender);
@@ -164,7 +170,9 @@ pub fn set_allowance(env: &Env, from: &Address, spender: &Address, amount: i128)
     } else {
         env.storage().persistent().set(&key, &amount);
         env.storage().persistent().extend_ttl(
-            &key, CRITICAL_STORAGE_THRESHOLD, CRITICAL_STORAGE_TTL
+            &key,
+            CRITICAL_STORAGE_THRESHOLD,
+            CRITICAL_STORAGE_TTL,
         );
     }
 }
@@ -174,10 +182,13 @@ pub fn bump_allowance(env: &Env, from: &Address, spender: &Address) {
     let key = (ALLOWANCE, from, spender);
     if env.storage().persistent().has(&key) {
         env.storage().persistent().extend_ttl(
-            &key, CRITICAL_STORAGE_THRESHOLD, CRITICAL_STORAGE_TTL
+            &key,
+            CRITICAL_STORAGE_THRESHOLD,
+            CRITICAL_STORAGE_TTL,
         );
     }
 }
+
 // LOCKED BALANCE
 pub fn get_locked_balance(env: &Env) -> i128 {
     env.storage().instance().get(&LOCKED_BALANCE).unwrap_or(0)
@@ -196,10 +207,13 @@ pub fn increment_locked_balance(env: &Env, amt: i128) -> Result<i128, BrazaError
 
 pub fn decrement_locked_balance(env: &Env, amt: i128) -> Result<i128, BrazaError> {
     let cur = get_locked_balance(env);
-    if cur < amt { return Err(BrazaError::InsufficientBalance); }
+    if cur < amt {
+        return Err(BrazaError::InsufficientBalance);
+    }
     set_locked_balance(env, cur - amt);
     Ok(cur - amt)
 }
+
 // CIRCULATING SUPPLY
 pub fn get_circulating_supply(env: &Env) -> i128 {
     let total = get_total_supply(env);
@@ -215,6 +229,7 @@ pub fn validate_burn_not_locked(env: &Env, burn: i128) -> Result<(), BrazaError>
     }
     Ok(())
 }
+
 // GLOBAL STATS
 pub fn get_vesting_stats(env: &Env) -> (u32, u32, i128, u32) {
     (
@@ -230,6 +245,7 @@ pub fn is_near_global_vesting_limit(env: &Env) -> bool {
     let thr = (MAX_GLOBAL_VESTING_SCHEDULES * 90) / 100;
     cur >= thr
 }
+
 // REENTRANCY GUARD
 pub fn is_reentrancy_locked(env: &Env) -> bool {
     env.storage().instance().get(&REENT_LOCK).unwrap_or(false)
@@ -245,6 +261,7 @@ pub fn assert_no_reentrancy(env: &Env) -> Result<(), BrazaError> {
     }
     Ok(())
 }
+
 // MINT TIME
 pub fn get_last_mint_time(env: &Env) -> Option<u32> {
     env.storage().instance().get(&LAST_MINT_TIME)
@@ -260,6 +277,7 @@ pub fn get_last_burn_time(env: &Env) -> Option<u32> {
 pub fn set_last_burn_time(env: &Env, ledger: u32) {
     env.storage().instance().set(&LAST_BURN_TIME, &ledger);
 }
+
 // LAST VEST CREATION
 pub fn get_last_vesting_creation_time(env: &Env, user: &Address) -> Option<u32> {
     let key = (LAST_VEST_TIME, user);
@@ -288,30 +306,22 @@ pub fn get_vesting_cooldown_remaining(env: &Env, user: &Address) -> Option<u32> 
     let el = now.saturating_sub(last);
     if el < VESTING_CREATION_COOLDOWN_LEDGERS {
         Some(VESTING_CREATION_COOLDOWN_LEDGERS - el)
-    } else { None }
+    } else {
+        None
+    }
 }
 
 // EVENT HELPERS
 pub fn emit_balance_event(env: &Env, user: &Address, amount: i128) {
-    env.events().publish(
-        (symbol_short!("bal_evt"), user),
-        amount
-    );
+    env.events()
+        .publish((symbol_short!("bal_evt"), user), amount);
 }
 
 pub fn emit_admin_event(env: &Env, admin: &Address) {
-    env.events().publish(
-        (symbol_short!("adm_set"),),
-        admin.clone()
-    );
+    env.events()
+        .publish((symbol_short!("adm_set"),), admin.clone());
 }
-// SYMBOL SAFETY — ALL SHORT
-pub const SYM_MINT: Symbol = symbol_short!("mint");
-pub const SYM_BURN: Symbol = symbol_short!("burn");
-pub const SYM_XFER: Symbol = symbol_short!("xfer");
-pub const SYM_PAUS: Symbol = symbol_short!("paused");
-pub const SYM_META: Symbol = symbol_short!("meta");
-// Todos com ≤ 9 chars para evitar "symbol too long"
+
 // ADMIN HELPERS
 pub fn ensure_admin(env: &Env, caller: &Address) -> Result<(), BrazaError> {
     let admin = get_admin(env);
@@ -328,6 +338,7 @@ pub fn assert_not_paused(env: &Env) -> Result<(), BrazaError> {
     }
     Ok(())
 }
+
 // ADD BALANCE
 pub fn add_balance(env: &Env, user: &Address, amt: i128) {
     let cur = get_balance(env, user);
@@ -338,13 +349,15 @@ pub fn add_balance(env: &Env, user: &Address, amt: i128) {
 // SUB BALANCE
 pub fn sub_balance(env: &Env, user: &Address, amt: i128) -> Result<(), BrazaError> {
     let cur = get_balance(env, user);
-    if cur < amt { return Err(BrazaError::InsufficientBalance); }
+    if cur < amt {
+        return Err(BrazaError::InsufficientBalance);
+    }
     set_balance(env, user, cur - amt);
     Ok(())
 }
 
 // RESET GLOBAL (somente admin deve usar)
-#[allow(dead_code)]  // Suprime warning - usado em admin.rs
+#[allow(dead_code)]
 pub fn reset_global_state(env: &Env) {
     env.storage().instance().set(&GLOBAL_VEST_COUNT, &0u32);
     env.storage().instance().set(&STORAGE_FEE_POOL, &0i128);
@@ -354,13 +367,13 @@ pub fn reset_global_state(env: &Env) {
 }
 
 // CLEANUP PERSISTENT KEYS
-#[allow(dead_code)]  // Suprime warning - usado em admin.rs para cleanup
+#[allow(dead_code)]
 pub fn cleanup_balance(env: &Env, addr: &Address) {
     let key = (BALANCE, addr);
     env.storage().persistent().remove(&key);
 }
 
-#[allow(dead_code)]  // Suprime warning - usado em vesting.rs
+#[allow(dead_code)]
 pub fn cleanup_vesting_user(env: &Env, addr: &Address) {
     let cnt = get_vesting_count(env, addr);
     for id in 0..cnt {
@@ -372,37 +385,22 @@ pub fn cleanup_vesting_user(env: &Env, addr: &Address) {
 }
 
 // SAFE GET BOOL
-#[allow(dead_code)]  // Suprime warning - usado em pause/blacklist
+#[allow(dead_code)]
 pub fn get_bool(env: &Env, key: Symbol) -> bool {
     env.storage().instance().get(&key).unwrap_or(false)
 }
 
 // SAFE SET
-#[allow(dead_code)]  // Suprime warning - usado em pause/blacklist
+#[allow(dead_code)]
 pub fn set_bool(env: &Env, key: Symbol, val: bool) {
     env.storage().instance().set(&key, &val);
 }
 
 // LEDGER SEQ GETTER
-#[allow(dead_code)]  // Suprime warning - usado em vesting cooldown
+#[allow(dead_code)]
 pub fn ledger_seq(env: &Env) -> u32 {
     env.ledger().sequence()
 }
-
-// ============================================================================
-// storage.rs finalizado com:
-// - Vesting
-// - Allowance
-// - Locked balance
-// - Circulating supply
-// - Timelock
-// - Reentrancy guard
-// - TTL seguro
-// - Admin, Pause
-// - Metadata
-// - Blacklist
-// - Testes completos
-// ============================================================================
 
 // ADMIN
 pub fn get_admin(env: &Env) -> Address {
@@ -431,7 +429,7 @@ pub fn set_total_supply(env: &Env, amt: i128) {
     env.storage().instance().set(&SUPPLY, &amt);
 }
 
-// BALANCE (EXATO QUE token.rs ESPERA)
+// BALANCE
 pub fn get_balance(env: &Env, user: &Address) -> i128 {
     let key = (BALANCE, user);
     env.storage().persistent().get(&key).unwrap_or(0)
@@ -442,13 +440,13 @@ pub fn set_balance(env: &Env, user: &Address, amt: i128) {
     env.storage().persistent().set(&key, &amt);
 }
 
-// REMOVE ALLOWANCE (token.rs E admin.rs USAM)
+// REMOVE ALLOWANCE
 pub fn remove_allowance(env: &Env, from: &Address, spender: &Address) {
     let key = (ALLOWANCE, from, spender);
     env.storage().persistent().remove(&key);
 }
 
-// increment_vesting_count — VERSÃO QUE vesting.rs ESPERA
+// increment_vesting_count
 pub fn increment_vesting_count(env: &Env, user: &Address) -> Result<u32, BrazaError> {
     let cur = get_vesting_count(env, user);
     if cur >= MAX_VESTING_SCHEDULES {
@@ -466,13 +464,109 @@ pub fn increment_vesting_count(env: &Env, user: &Address) -> Result<u32, BrazaEr
     Ok(new)
 }
 
-// TESTUTILS TRAITS FOR SDK 21.x (simplificado - remove unused imports)
-#[cfg(test)]
-mod sdk_test_compat {
-    // Removido Events as _ (unused); use env.events().all() direto nos testes
+// ============================================================================
+// FUNÇÕES DE TESTE (EXPOSTAS APENAS PARA TESTES)
+// ============================================================================
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn set_admin_test(env: &Env, admin: &Address) {
+    set_admin(env, admin);
 }
 
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn is_blacklisted_test(env: &Env, addr: &Address) -> bool {
+    is_blacklisted(env, addr)
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn set_blacklisted_test(env: &Env, addr: &Address, val: bool) {
+    set_blacklisted(env, addr, val);
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn set_balance_test(env: &Env, user: &Address, amt: i128) {
+    set_balance(env, user, amt);
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn get_balance_test(env: &Env, user: &Address) -> i128 {
+    get_balance(env, user)
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn set_total_supply_test(env: &Env, amt: i128) {
+    set_total_supply(env, amt);
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn set_locked_balance_test(env: &Env, amt: i128) {
+    set_locked_balance(env, amt);
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn set_paused_test(env: &Env, val: bool) {
+    set_paused(env, val);
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn create_test_vesting(
+    env: &Env,
+    beneficiary: &Address,
+    amount: i128,
+    start: u32,
+    cliff: u32,
+    duration: u32,
+) -> Result<u32, BrazaError> {
+    let id = increment_vesting_count(env, beneficiary)?;
+
+    let schedule = VestingSchedule {
+        beneficiary: beneficiary.clone(),
+        total_amount: amount,
+        released_amount: 0,
+        start_ledger: start,
+        cliff_ledgers: cliff,
+        duration_ledgers: duration,
+        revocable: false,
+        revoked: false,
+    };
+
+    set_vesting_schedule(env, beneficiary, id - 1, &schedule);
+    Ok(id - 1)
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn clear_all_vestings(env: &Env, beneficiary: &Address) {
+    let count = get_vesting_count(env, beneficiary);
+    for id in 0..count {
+        remove_vesting_schedule(env, beneficiary, id);
+    }
+
+    let key = (VEST_CNT, beneficiary);
+    env.storage().persistent().set(&key, &0u32);
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[cfg(not(tarpaulin_include))]
+pub fn reset_contract_state(env: &Env) {
+    reset_global_state(env);
+}
+
+// ============================================================================
+// TESTES UNITÁRIOS INTERNOS
+// ============================================================================
+
 #[cfg(test)]
+#[cfg(not(tarpaulin_include))]
 mod circulating_tests {
     use super::*;
 
@@ -500,6 +594,7 @@ mod circulating_tests {
 }
 
 #[cfg(test)]
+#[cfg(not(tarpaulin_include))]
 mod locked_extra_tests {
     use super::*;
 
@@ -527,6 +622,7 @@ mod locked_extra_tests {
 }
 
 #[cfg(test)]
+#[cfg(not(tarpaulin_include))]
 mod reentrancy_tests {
     use super::*;
 
@@ -551,6 +647,7 @@ mod reentrancy_tests {
 }
 
 #[cfg(test)]
+#[cfg(not(tarpaulin_include))]
 mod timelock_tests {
     use super::*;
 
@@ -576,6 +673,7 @@ mod timelock_tests {
 }
 
 #[cfg(test)]
+#[cfg(not(tarpaulin_include))]
 mod allowance_tests_extra {
     use super::*;
     use soroban_sdk::testutils::Address as _;

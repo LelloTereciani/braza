@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use soroban_sdk::{contracttype, contracterror, String};
+use soroban_sdk::{contracterror, contracttype, String};
 
 // ============================================================================
 // ERROS DO CONTRATO
@@ -26,9 +26,8 @@ pub enum BrazaError {
     GlobalVestingLimitExceeded = 16,
     VestingCooldownActive = 17,
     VestingAmountTooLow = 18,
-
-    // Allowance insuficiente para transfer_from
     InsufficientAllowance = 19,
+    OverflowError = 20, // ← ADICIONAR ESTA LINHA
 }
 
 // ============================================================================
@@ -60,16 +59,22 @@ pub struct VestingSchedule {
     pub revoked: bool,
 }
 
+// ============================================================================
+// TESTES UNITÁRIOS
+// ============================================================================
+
 #[cfg(test)]
+#[cfg(not(tarpaulin_include))]
 mod tests {
     use super::*;
-    use soroban_sdk::{Env, Address, String};  // <- Imports necessários para o teste
+    use soroban_sdk::{testutils::Address as _, Env};
 
     #[test]
     fn test_error_ordering() {
         assert!(BrazaError::AlreadyInitialized < BrazaError::Unauthorized);
         assert!(BrazaError::Unauthorized < BrazaError::InsufficientBalance);
         assert!(BrazaError::VestingAmountTooLow < BrazaError::InsufficientAllowance);
+        assert!(BrazaError::InsufficientAllowance < BrazaError::OverflowError);
     }
 
     #[test]
@@ -77,28 +82,42 @@ mod tests {
         assert_eq!(BrazaError::AlreadyInitialized as u32, 1);
         assert_eq!(BrazaError::InsufficientBalance as u32, 3);
         assert_eq!(BrazaError::InsufficientAllowance as u32, 19);
+        assert_eq!(BrazaError::OverflowError as u32, 20);
     }
 
     #[test]
     fn test_error_equality() {
-        assert_eq!(BrazaError::InsufficientAllowance, BrazaError::InsufficientAllowance);
-        assert_ne!(BrazaError::InsufficientAllowance, BrazaError::InsufficientBalance);
+        assert_eq!(
+            BrazaError::InsufficientAllowance,
+            BrazaError::InsufficientAllowance
+        );
+        assert_ne!(
+            BrazaError::InsufficientAllowance,
+            BrazaError::InsufficientBalance
+        );
+        assert_ne!(BrazaError::OverflowError, BrazaError::InvalidAmount);
     }
 
     #[test]
     fn test_error_clone() {
         let a = BrazaError::InsufficientAllowance;
-        let b = a.clone();
+        let b = a;
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_overflow_error_exists() {
+        let err = BrazaError::OverflowError;
+        assert_eq!(err as u32, 20);
     }
 
     #[test]
     fn test_vesting_schedule_clone() {
         let env = Env::default();
-        let addr = Address::from_string(&String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"));  // <- Atribuído a addr
+        let addr = soroban_sdk::Address::generate(&env);
 
         let s = VestingSchedule {
-            beneficiary: addr.clone(),  // <- Agora addr existe e pode ser clonado
+            beneficiary: addr.clone(),
             total_amount: 1000,
             released_amount: 0,
             start_ledger: 0,

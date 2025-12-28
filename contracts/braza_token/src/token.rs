@@ -1,13 +1,15 @@
 #![allow(unused_imports)]
-use soroban_sdk::{
-    contract, contractimpl, Address, Env, String, Vec, symbol_short
-};
-
+use crate::compliance;
+use crate::compliance_cache;
+use crate::events;
 use crate::storage;
 use crate::types::{BrazaError, TokenMetadata, VestingSchedule};
 use crate::validation;
 use crate::vesting;
-use crate::events;
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, Address, BytesN, Env, String, String as SorobanString,
+    Vec,
+};
 
 // ============================================================================
 // CONTRATO PRINCIPAL - BRAZA TOKEN
@@ -15,10 +17,29 @@ use crate::events;
 
 #[contract]
 pub struct BrazaToken;
+#[allow(dead_code)]
+struct ReentrancyGuard<'a> {
+    env: &'a Env,
+}
+#[allow(dead_code)]
+impl<'a> ReentrancyGuard<'a> {
+    fn new(env: &'a Env) -> Result<Self, BrazaError> {
+        if storage::is_reentrancy_locked(env) {
+            return Err(BrazaError::Unauthorized);
+        }
+        storage::set_reentrancy_guard(env, true);
+        Ok(Self { env })
+    }
+}
+
+impl<'a> Drop for ReentrancyGuard<'a> {
+    fn drop(&mut self) {
+        storage::set_reentrancy_guard(self.env, false);
+    }
+}
 
 #[contractimpl]
 impl BrazaToken {
-
     // ============================================================================
     // INICIALIZAÇÃO
     // ============================================================================
@@ -29,21 +50,16 @@ impl BrazaToken {
         name: String,
         symbol: String,
     ) -> Result<(), BrazaError> {
-
-        // Checar se já inicializado
         if env.storage().instance().has(&symbol_short!("admin")) {
             return Err(BrazaError::AlreadyInitialized);
         }
 
-        // Setar admin e estado inicial
         storage::set_admin(&env, &admin);
         storage::set_paused(&env, false);
 
-        // Mint inicial de 10M BRZ
         storage::set_balance(&env, &admin, storage::INITIAL_SUPPLY);
         storage::set_total_supply(&env, storage::INITIAL_SUPPLY);
 
-        // Criar metadata
         let metadata = TokenMetadata {
             name,
             symbol,
@@ -51,14 +67,39 @@ impl BrazaToken {
         };
         storage::set_metadata(&env, &metadata);
 
-        // Emitir evento de mint
+        // ============================================================================
+        // ADICIONAR: Setar país, KYC e risk score DIRETAMENTE NO STORAGE
+        // (Não usar compliance:: functions que exigem require_auth)
+        // ============================================================================
+        let br_code = String::from_str(&env, "BR");
+        let key_country = (symbol_short!("ctry"), &admin);
+        env.storage().persistent().set(&key_country, &br_code);
+
+        let key_kyc = (symbol_short!("kyc"), &admin);
+        env.storage().persistent().set(&key_kyc, &3u32);
+
+        let key_risk = (symbol_short!("risk"), &admin);
+        env.storage().persistent().set(&key_risk, &0u32);
+
         events::emit_mint(&env, &admin, storage::INITIAL_SUPPLY);
 
         Ok(())
     }
 
     // ============================================================================
-    // SEP‑41 — Funções de leitura
+    // UPGRADE
+    // ============================================================================
+
+    pub fn update_code(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), BrazaError> {
+        let admin = storage::get_admin(&env);
+        admin.require_auth();
+        storage::bump_critical_storage(&env);
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
+
+    // ============================================================================
+    // SEP‑41 — LEITURA
     // ============================================================================
 
     pub fn name(env: Env) -> String {
@@ -85,56 +126,51 @@ impl BrazaToken {
         storage::get_total_supply(&env)
     }
 
-        // ============================================================================
-    // TRANSFERÊNCIAS — CEI + COMPLIANCE + ANTI‑REENTRÂNCIA
+    // ============================================================================
+    // TRANSFERÊNCIAS
     // ============================================================================
 
-    pub fn transfer(
-        env: Env,
-        from: Address,
-        to: Address,
-        amount: i128,
-    ) -> Result<(), BrazaError> {
-
-        // === REENTRANCY GUARD ===
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) -> Result<(), BrazaError> {
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
         storage::set_reentrancy_guard(&env, true);
 
         let result = (|| {
-
-            // === CHECKS ===
             from.require_auth();
+
             storage::bump_critical_storage(&env);
 
-            // Pausa / blacklist
-            validation::require_not_paused(&env)?;
-            validation::require_not_blacklisted(&env, &from)?;
-            validation::require_not_blacklisted(&env, &to)?;
+            // ✅ VALIDAÇÃO SEP-41: Se from == to
+            if from == to {
+                validation::require_not_paused(&env)?;
+                validation::require_positive_amount(amount)?;
+                validation::require_sufficient_balance(&env, &from, amount)?;
+                events::emit_transfer(&env, &from, &to, amount);
+                return Ok(());
+            }
 
-            // Valores
+            // ✅ VALIDAÇÕES BÁSICAS
+            validation::require_not_paused(&env)?;
             validation::require_positive_amount(amount)?;
             validation::require_sufficient_balance(&env, &from, amount)?;
 
-            // === COMPLIANCE (ADICIONADO) ===
-            validation::require_country_allowed(&env, &from)?;
-            validation::require_country_allowed(&env, &to)?;
+            // ✅ VALIDAÇÕES COM CACHE CORRETO
+            compliance_cache::validate_with_cache(&env, &from, 2, 50)?;
+            compliance_cache::validate_with_cache(&env, &to, 2, 50)?;
 
-            validation::require_kyc_level(&env, &from, 1)?;
-            validation::require_kyc_level(&env, &to, 1)?;
+            // ✅ Validação de daily limit
+            validation::require_daily_volume_limit(&env, &from, amount)?;
 
-            validation::require_acceptable_risk(&env, &from, 50)?;
-            validation::require_acceptable_risk(&env, &to, 50)?;
+            // ✅ BUMP #2: Antes de MODIFICAR balances
+            storage::bump_critical_storage(&env);
 
-            // === EFFECTS ===
             let from_balance = storage::get_balance(&env, &from);
             let to_balance = storage::get_balance(&env, &to);
 
             let new_from_balance = from_balance
                 .checked_sub(amount)
                 .ok_or(BrazaError::InsufficientBalance)?;
-
             let new_to_balance = to_balance
                 .checked_add(amount)
                 .ok_or(BrazaError::InvalidAmount)?;
@@ -142,7 +178,14 @@ impl BrazaToken {
             storage::set_balance(&env, &from, new_from_balance);
             storage::set_balance(&env, &to, new_to_balance);
 
-            // === INTERACTIONS ===
+            // ✅ BUMP #3: Antes de MODIFICAR daily volume
+            storage::bump_critical_storage(&env);
+
+            compliance::check_and_update_daily_volume(&env, &from, amount)?;
+
+            // ✅ Invalidar cache após modificação
+            compliance_cache::invalidate_cache(&env, &from);
+
             events::emit_transfer(&env, &from, &to, amount);
 
             Ok(())
@@ -152,10 +195,6 @@ impl BrazaToken {
         result
     }
 
-    // ============================================================================
-    // TRANSFER_FROM — CORRIGIDO COM COMPLIANCE, CEI E ANTI‑REENTRÂNCIA
-    // ============================================================================
-
     pub fn transfer_from(
         env: Env,
         spender: Address,
@@ -163,16 +202,12 @@ impl BrazaToken {
         to: Address,
         amount: i128,
     ) -> Result<(), BrazaError> {
-
-        // === REENTRANCY GUARD ===
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
         storage::set_reentrancy_guard(&env, true);
 
         let result = (|| {
-
-            // === CHECKS ===
             spender.require_auth();
             storage::bump_critical_storage(&env);
 
@@ -184,20 +219,18 @@ impl BrazaToken {
             validation::require_positive_amount(amount)?;
             validation::require_sufficient_balance(&env, &from, amount)?;
 
-            // === COMPLIANCE (ADICIONADO) ===
             validation::require_country_allowed(&env, &spender)?;
             validation::require_country_allowed(&env, &from)?;
             validation::require_country_allowed(&env, &to)?;
 
-            validation::require_kyc_level(&env, &spender, 1)?;
-            validation::require_kyc_level(&env, &from, 1)?;
-            validation::require_kyc_level(&env, &to, 1)?;
+            validation::require_kyc_level(&env, &spender, 2)?;
+            validation::require_kyc_level(&env, &from, 2)?;
+            validation::require_kyc_level(&env, &to, 2)?;
 
             validation::require_acceptable_risk(&env, &spender, 50)?;
             validation::require_acceptable_risk(&env, &from, 50)?;
             validation::require_acceptable_risk(&env, &to, 50)?;
 
-            // === ALLOWANCE ===
             let current_allowance = storage::get_allowance(&env, &from, &spender);
 
             if current_allowance < amount {
@@ -215,14 +248,12 @@ impl BrazaToken {
             storage::set_allowance(&env, &from, &spender, new_allowance);
             storage::bump_allowance(&env, &from, &spender);
 
-            // === EFFECTS — Atualizar saldos ===
             let from_balance = storage::get_balance(&env, &from);
             let to_balance = storage::get_balance(&env, &to);
 
             let new_from_balance = from_balance
                 .checked_sub(amount)
                 .ok_or(BrazaError::InsufficientBalance)?;
-
             let new_to_balance = to_balance
                 .checked_add(amount)
                 .ok_or(BrazaError::InvalidAmount)?;
@@ -230,7 +261,6 @@ impl BrazaToken {
             storage::set_balance(&env, &from, new_from_balance);
             storage::set_balance(&env, &to, new_to_balance);
 
-            // === INTERACTIONS ===
             events::emit_transfer(&env, &from, &to, amount);
 
             env.events().publish(
@@ -245,8 +275,8 @@ impl BrazaToken {
         result
     }
 
-        // ============================================================================
-    // ALLOWANCE — SISTEMA COMPLETO CORRIGIDO
+    // ============================================================================
+    // ALLOWANCE
     // ============================================================================
 
     pub fn approve(
@@ -255,23 +285,19 @@ impl BrazaToken {
         spender: Address,
         amount: i128,
     ) -> Result<(), BrazaError> {
-
         from.require_auth();
         storage::bump_critical_storage(&env);
 
-        // Pausa / blacklist
         validation::require_not_paused(&env)?;
         validation::require_not_blacklisted(&env, &from)?;
         validation::require_not_blacklisted(&env, &spender)?;
 
-        // amount pode ser 0 (revogar), mas nunca negativo
         if amount < 0 {
             return Err(BrazaError::InvalidAmount);
         }
 
         let current_allowance = storage::get_allowance(&env, &from, &spender);
 
-        // Aviso opcional sobre race condition
         if current_allowance != 0 && amount != 0 {
             env.events().publish(
                 (symbol_short!("all_race"), &from, &spender),
@@ -279,11 +305,8 @@ impl BrazaToken {
             );
         }
 
-        // Effects
         storage::set_allowance(&env, &from, &spender, amount);
         storage::bump_allowance(&env, &from, &spender);
-
-        // Interactions
         events::emit_approval(&env, &from, &spender, amount);
 
         Ok(())
@@ -295,7 +318,6 @@ impl BrazaToken {
         spender: Address,
         delta: i128,
     ) -> Result<(), BrazaError> {
-
         from.require_auth();
         storage::bump_critical_storage(&env);
 
@@ -305,20 +327,13 @@ impl BrazaToken {
         validation::require_positive_amount(delta)?;
 
         let current = storage::get_allowance(&env, &from, &spender);
-
         let new = current
             .checked_add(delta)
             .ok_or(BrazaError::InvalidAmount)?;
 
         storage::set_allowance(&env, &from, &spender, new);
         storage::bump_allowance(&env, &from, &spender);
-
         events::emit_approval(&env, &from, &spender, new);
-
-        env.events().publish(
-            (symbol_short!("all_inc"), &from, &spender),
-            (delta, new),
-        );
 
         Ok(())
     }
@@ -329,7 +344,6 @@ impl BrazaToken {
         spender: Address,
         delta: i128,
     ) -> Result<(), BrazaError> {
-
         from.require_auth();
         storage::bump_critical_storage(&env);
 
@@ -339,7 +353,6 @@ impl BrazaToken {
         validation::require_positive_amount(delta)?;
 
         let current = storage::get_allowance(&env, &from, &spender);
-
         if current < delta {
             return Err(BrazaError::InsufficientAllowance);
         }
@@ -350,13 +363,7 @@ impl BrazaToken {
 
         storage::set_allowance(&env, &from, &spender, new);
         storage::bump_allowance(&env, &from, &spender);
-
         events::emit_approval(&env, &from, &spender, new);
-
-        env.events().publish(
-            (symbol_short!("all_dec"), &from, &spender),
-            (delta, new),
-        );
 
         Ok(())
     }
@@ -367,46 +374,31 @@ impl BrazaToken {
     }
 
     // ============================================================================
-    // MINT — Corrigido com proteção TOTAL
+    // MINT (Admin)
     // ============================================================================
 
-    pub fn mint(
-        env: Env,
-        to: Address,
-        amount: i128,
-    ) -> Result<(), BrazaError> {
-
-        // Reentrância
+    pub fn mint(env: Env, to: Address, amount: i128) -> Result<(), BrazaError> {
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
         storage::set_reentrancy_guard(&env, true);
 
         let result = (|| {
-
-            // CHECKS
             let admin = storage::get_admin(&env);
             admin.require_auth();
 
             storage::bump_critical_storage(&env);
-
             validation::require_not_paused(&env)?;
             validation::require_positive_amount(amount)?;
-
-            // Supply máximo de 21M
             validation::require_max_supply_not_exceeded(&env, amount)?;
 
-            // Compliance — destinatário
             validation::require_not_blacklisted(&env, &to)?;
             validation::require_country_allowed(&env, &to)?;
-            validation::require_kyc_level(&env, &to, 1)?;
+            validation::require_kyc_level(&env, &to, 2)?;
             validation::require_acceptable_risk(&env, &to, 50)?;
 
-            // EFFECTS — atualizar saldos
             let bal = storage::get_balance(&env, &to);
-            let new_bal = bal
-                .checked_add(amount)
-                .ok_or(BrazaError::InvalidAmount)?;
+            let new_bal = bal.checked_add(amount).ok_or(BrazaError::OverflowError)?;
 
             let supply = storage::get_total_supply(&env);
             let new_supply = supply
@@ -416,11 +408,8 @@ impl BrazaToken {
             storage::set_balance(&env, &to, new_bal);
             storage::set_total_supply(&env, new_supply);
 
-            // INTERACTIONS
             events::emit_mint(&env, &to, amount);
-
             Ok(())
-
         })();
 
         storage::set_reentrancy_guard(&env, false);
@@ -428,36 +417,26 @@ impl BrazaToken {
     }
 
     // ============================================================================
-    // BURN — Corrigido com proteção contra queima de tokens locked
+    // BURN (User)
     // ============================================================================
 
-    pub fn burn(
-        env: Env,
-        from: Address,
-        amount: i128,
-    ) -> Result<(), BrazaError> {
-
-        // Reentrância
+    pub fn burn(env: Env, from: Address, amount: i128) -> Result<(), BrazaError> {
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
         storage::set_reentrancy_guard(&env, true);
 
         let result = (|| {
-
-            let admin = storage::get_admin(&env);
-            admin.require_auth();
+            from.require_auth();
 
             storage::bump_critical_storage(&env);
-
             validation::require_not_paused(&env)?;
             validation::require_positive_amount(amount)?;
             validation::require_sufficient_balance(&env, &from, amount)?;
 
-            // CRÍTICO — não pode queimar tokens locked em vesting
+            validation::require_not_blacklisted(&env, &from)?;
             storage::validate_burn_not_locked(&env, amount)?;
 
-            // EFFECTS
             let bal = storage::get_balance(&env, &from);
             let new_bal = bal
                 .checked_sub(amount)
@@ -471,9 +450,7 @@ impl BrazaToken {
             storage::set_balance(&env, &from, new_bal);
             storage::set_total_supply(&env, new_supply);
 
-            // INTERACTIONS
             events::emit_burn(&env, &from, amount);
-
             Ok(())
         })();
 
@@ -481,8 +458,8 @@ impl BrazaToken {
         result
     }
 
-        // ============================================================================
-    // VESTING – CREATE / RELEASE / REVOKE (CORRIGIDO)
+    // ============================================================================
+    // VESTING
     // ============================================================================
 
     pub fn create_vesting(
@@ -493,42 +470,32 @@ impl BrazaToken {
         duration_ledgers: u32,
         revocable: bool,
     ) -> Result<u32, BrazaError> {
-
-        // Anti-reentrância
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
-
         storage::set_reentrancy_guard(&env, true);
 
         let result = (|| {
-
-            // Admin
             let admin = storage::get_admin(&env);
             admin.require_auth();
             storage::bump_critical_storage(&env);
 
-            // Regras
             validation::require_not_paused(&env)?;
             validation::require_valid_vesting_params(
                 total_amount,
                 cliff_ledgers,
-                duration_ledgers
+                duration_ledgers,
             )?;
             validation::require_sufficient_balance(&env, &admin, total_amount)?;
 
-            // 1. Debitar tokens do admin (bloqueio)
             let admin_balance = storage::get_balance(&env, &admin);
             let new_admin_balance = admin_balance
                 .checked_sub(total_amount)
                 .ok_or(BrazaError::InsufficientBalance)?;
 
             storage::set_balance(&env, &admin, new_admin_balance);
-
-            // 2. Atualizar locked balance global
             storage::increment_locked_balance(&env, total_amount)?;
 
-            // 3. Criar vesting schedule
             let schedule_id = vesting::create_vesting_schedule(
                 &env,
                 &beneficiary,
@@ -538,9 +505,7 @@ impl BrazaToken {
                 revocable,
             )?;
 
-            // 4. Evento
             events::emit_vesting_created(&env, &beneficiary, schedule_id, total_amount);
-
             Ok(schedule_id)
         })();
 
@@ -548,46 +513,32 @@ impl BrazaToken {
         result
     }
 
-
     pub fn release_vested(
         env: Env,
         beneficiary: Address,
         schedule_id: u32,
     ) -> Result<i128, BrazaError> {
-
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
-
         storage::set_reentrancy_guard(&env, true);
 
         let result = (|| {
-
             beneficiary.require_auth();
             storage::bump_critical_storage(&env);
-
             validation::require_not_paused(&env)?;
 
-            // 1. Calcular valor liberado
-            let releasable = vesting::release_vested_tokens(
-                &env,
-                &beneficiary,
-                schedule_id
-            )?;
+            let releasable = vesting::release_vested_tokens(&env, &beneficiary, schedule_id)?;
 
-            // 2. Transferir para beneficiário
             let bal = storage::get_balance(&env, &beneficiary);
-            let new_bal = bal.checked_add(releasable)
+            let new_bal = bal
+                .checked_add(releasable)
                 .ok_or(BrazaError::InvalidAmount)?;
 
             storage::set_balance(&env, &beneficiary, new_bal);
-
-            // 3. Atualizar locked balance
             storage::decrement_locked_balance(&env, releasable)?;
 
-            // 4. Evento
             events::emit_vesting_released(&env, &beneficiary, schedule_id, releasable);
-
             Ok(releasable)
         })();
 
@@ -595,48 +546,33 @@ impl BrazaToken {
         result
     }
 
-
     pub fn revoke_vesting(
         env: Env,
         beneficiary: Address,
         schedule_id: u32,
     ) -> Result<i128, BrazaError> {
-
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
-
         storage::set_reentrancy_guard(&env, true);
 
         let result = (|| {
-
             let admin = storage::get_admin(&env);
             admin.require_auth();
             storage::bump_critical_storage(&env);
-
             validation::require_not_paused(&env)?;
 
-            // 1. Revogar schedule e obter tokens não-vestidos
-            let unvested = vesting::revoke_vesting_schedule(
-                &env,
-                &beneficiary,
-                schedule_id
-            )?;
+            let unvested = vesting::revoke_vesting_schedule(&env, &beneficiary, schedule_id)?;
 
-            // 2. Devolver para admin
             let adm_bal = storage::get_balance(&env, &admin);
             let new_bal = adm_bal
                 .checked_add(unvested)
                 .ok_or(BrazaError::InvalidAmount)?;
 
             storage::set_balance(&env, &admin, new_bal);
-
-            // 3. Atualizar locked balance
             storage::decrement_locked_balance(&env, unvested)?;
 
-            // 4. Evento
             events::emit_vesting_revoked(&env, &beneficiary, schedule_id);
-
             Ok(unvested)
         })();
 
@@ -645,7 +581,7 @@ impl BrazaToken {
     }
 
     // ============================================================================
-    // VESTING — FUNÇÕES DE CONSULTA
+    // GETTERS & ADMIN
     // ============================================================================
 
     pub fn get_vesting_schedule(
@@ -653,18 +589,12 @@ impl BrazaToken {
         beneficiary: Address,
         schedule_id: u32,
     ) -> Result<VestingSchedule, BrazaError> {
-
         storage::bump_critical_storage(&env);
-
         storage::get_vesting_schedule(&env, &beneficiary, schedule_id)
             .ok_or(BrazaError::VestingNotFound)
     }
 
-    pub fn get_all_vesting_schedules(
-        env: Env,
-        beneficiary: Address
-    ) -> Vec<VestingSchedule> {
-
+    pub fn get_all_vesting_schedules(env: Env, beneficiary: Address) -> Vec<VestingSchedule> {
         storage::bump_critical_storage(&env);
         storage::get_all_vesting_schedules(&env, &beneficiary)
     }
@@ -674,18 +604,11 @@ impl BrazaToken {
         beneficiary: Address,
         schedule_id: u32,
     ) -> Result<i128, BrazaError> {
-
         storage::bump_critical_storage(&env);
-
         let schedule = storage::get_vesting_schedule(&env, &beneficiary, schedule_id)
             .ok_or(BrazaError::VestingNotFound)?;
-
         Ok(vesting::calculate_releasable_amount(&env, &schedule))
     }
-
-    // ============================================================================
-    // SUPPLY STATS
-    // ============================================================================
 
     pub fn get_locked_balance(env: Env) -> i128 {
         storage::bump_critical_storage(&env);
@@ -699,83 +622,61 @@ impl BrazaToken {
 
     pub fn get_supply_stats(env: Env) -> (i128, i128, i128, i128) {
         storage::bump_critical_storage(&env);
-
         let total = storage::get_total_supply(&env);
         let locked = storage::get_locked_balance(&env);
         let circulating = storage::get_circulating_supply(&env);
         let max = storage::MAX_SUPPLY;
-
         (total, locked, circulating, max)
     }
 
-    // ============================================================================
-    // ADMIN: PAUSE / UNPAUSE / BLACKLIST
-    // ============================================================================
-
     pub fn pause(env: Env) -> Result<(), BrazaError> {
-
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
         storage::set_reentrancy_guard(&env, true);
-
-        let res = (|| {
+        // ANTES: let res = (|| { ... })();
+        // DEPOIS:
+        let res = {
             let admin = storage::get_admin(&env);
             admin.require_auth();
             storage::set_paused(&env, true);
             events::emit_pause(&env);
             Ok(())
-        })();
-
+        };
         storage::set_reentrancy_guard(&env, false);
         res
     }
 
-
     pub fn unpause(env: Env) -> Result<(), BrazaError> {
-
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
-
         storage::set_reentrancy_guard(&env, true);
-
-        let res = (|| {
+        // DEPOIS:
+        let res = {
             let admin = storage::get_admin(&env);
             admin.require_auth();
             storage::set_paused(&env, false);
             events::emit_unpause(&env);
             Ok(())
-        })();
-
+        };
         storage::set_reentrancy_guard(&env, false);
         res
     }
 
-
-    pub fn set_blacklisted(
-        env: Env,
-        addr: Address,
-        blacklisted: bool,
-    ) -> Result<(), BrazaError> {
-
+    pub fn set_blacklisted(env: Env, addr: Address, blacklisted: bool) -> Result<(), BrazaError> {
         if storage::is_reentrancy_locked(&env) {
             return Err(BrazaError::Unauthorized);
         }
-
         storage::set_reentrancy_guard(&env, true);
-
-        let res = (|| {
-
+        // DEPOIS:
+        let res = {
             let admin = storage::get_admin(&env);
             admin.require_auth();
-
             storage::set_blacklisted(&env, &addr, blacklisted);
             events::emit_blacklist(&env, &addr, blacklisted);
-
             Ok(())
-        })();
-
+        };
         storage::set_reentrancy_guard(&env, false);
         res
     }
@@ -794,6 +695,142 @@ impl BrazaToken {
         storage::bump_critical_storage(&env);
         storage::is_blacklisted(&env, &addr)
     }
+
+    // ============================================================================
+    // GESTÃO DE ADMINISTRAÇÃO & GOD MODE
+    // ============================================================================
+
+    pub fn transfer_ownership(env: Env, new_admin: Address) -> Result<(), BrazaError> {
+        let current_admin = storage::get_admin(&env);
+        current_admin.require_auth();
+        storage::bump_critical_storage(&env);
+
+        env.events()
+            .publish((symbol_short!("adm_chg"), current_admin), new_admin.clone());
+
+        storage::set_admin(&env, &new_admin);
+        Ok(())
+    }
+
+    pub fn recover_tokens(
+        env: Env,
+        token_address: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), BrazaError> {
+        use crate::admin;
+        admin::recover_tokens(&env, token_address, to, amount)
+    }
+
+    pub fn force_transfer(
+        env: Env,
+        from: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), BrazaError> {
+        use crate::admin;
+        admin::force_transfer(&env, &from, &to, amount)
+    }
+
+    pub fn force_burn(env: Env, from: Address, amount: i128) -> Result<(), BrazaError> {
+        use crate::admin;
+        admin::force_burn(&env, &from, amount)
+    }
+
+    // ============================================================================
+    // GESTÃO DE COMPLIANCE (Expondo para o Client)
+    // ============================================================================
+
+    pub fn set_kyc_level(
+        env: Env,
+        admin: Address,
+        user: Address,
+        level: u32,
+    ) -> Result<(), BrazaError> {
+        // ✅ ADICIONAR ESTA LINHA
+        validation::validate_kyc_level_value(level)?;
+
+        use crate::compliance;
+        compliance::set_kyc_level(&env, &admin, &user, level)
+    }
+
+    pub fn set_country_code(
+        env: Env,
+        admin: Address,
+        user: Address,
+        code: String,
+    ) -> Result<(), BrazaError> {
+        use crate::compliance;
+        compliance::set_country_code(&env, &admin, &user, code)
+    }
+
+    pub fn add_blocked_country(env: Env, admin: Address, code: String) -> Result<(), BrazaError> {
+        use crate::compliance;
+        compliance::add_blocked_country(&env, &admin, code)
+    }
+
+    pub fn set_risk_score(
+        env: Env,
+        admin: Address,
+        user: Address,
+        score: u32,
+    ) -> Result<(), BrazaError> {
+        use crate::compliance;
+        compliance::set_risk_score(&env, &admin, &user, score)
+    }
+
+    pub fn set_daily_limit(
+        env: Env,
+        admin: Address,
+        user: Address,
+        limit: i128,
+    ) -> Result<(), BrazaError> {
+        use crate::compliance;
+        compliance::set_daily_limit(&env, &admin, &user, limit)
+    }
+
+    // ✅ Função helper para bumpar storage (apenas para testes)
+    // ✅ Função de contrato para bumpar storage (apenas para testes)
 }
 
+#[contractimpl]
+impl BrazaToken {
+    pub fn bump_storage_for_user(env: Env, user: Address) -> Result<(), BrazaError> {
+        // ✅ BUMP #1: Geral
+        storage::bump_critical_storage(&env);
 
+        // ✅ BUMP #2: Antes de acessar balance
+        storage::bump_critical_storage(&env);
+        let balance_key = (symbol_short!("balance"), &user);
+        if let Some(balance) = env.storage().persistent().get::<_, i128>(&balance_key) {
+            storage::bump_critical_storage(&env);
+            env.storage().persistent().set(&balance_key, &balance);
+        }
+
+        // ✅ BUMP #3: Antes de acessar vol_day
+        storage::bump_critical_storage(&env);
+        let vol_day_key = (symbol_short!("vol_day"), &user);
+        if let Some(vol_day) = env.storage().persistent().get::<_, u32>(&vol_day_key) {
+            storage::bump_critical_storage(&env);
+            env.storage().persistent().set(&vol_day_key, &vol_day);
+        }
+
+        // ✅ BUMP #4: Antes de acessar vol_amt
+        storage::bump_critical_storage(&env);
+        let vol_amt_key = (symbol_short!("vol_amt"), &user);
+        if let Some(vol_amt) = env.storage().persistent().get::<_, i128>(&vol_amt_key) {
+            storage::bump_critical_storage(&env);
+            env.storage().persistent().set(&vol_amt_key, &vol_amt);
+        }
+
+        // ✅ BUMP #5: Antes de acessar daily_lim
+        storage::bump_critical_storage(&env);
+        let daily_lim_key = (symbol_short!("daily_lim"), &user);
+        if let Some(daily_lim) = env.storage().persistent().get::<_, i128>(&daily_lim_key) {
+            storage::bump_critical_storage(&env);
+            env.storage().persistent().set(&daily_lim_key, &daily_lim);
+        }
+
+        Ok(())
+    }
+}

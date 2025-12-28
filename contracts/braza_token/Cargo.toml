@@ -2,17 +2,28 @@
 name = "braza-token"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = [] # Mudei para vazio para produção (testutils pesa no binário final)
+testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
-soroban-sdk = "21.0.0"
-dotenv = "0.15"  # Para carregar .env em testes
+# Para produção, NÃO ative testutils por padrão
+soroban-sdk = "21.7.7" 
+
+# CORREÇÃO CRÍTICA: Removi 'proptest' daqui. Ele quebrava o build WASM.
 
 [dev-dependencies]
-soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+soroban-sdk = { version = "21.7.7", features = ["testutils"] }
+proptest = "1.4" # Agora está no lugar certo (só para testes)
+rand = "0.8"
+dotenv = "0.15"
 
+# Configurações de Otimização (Mantive as suas, estão ótimas)
 [profile.release]
 opt-level = "z"
 overflow-checks = true
@@ -26,3 +37,6 @@ lto = true
 [profile.release-with-logs]
 inherits = "release"
 debug-assertions = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
