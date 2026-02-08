@@ -74,6 +74,21 @@ O **BRAZA** é a moeda do empreendedor brasileiro — criada para quem acorda ce
 
 ---
 
+## 🧰 Tecnologias Utilizadas
+
+- Rust 2021 (linguagem do contrato)
+- Soroban SDK 21.7.7 (smart contracts na Stellar)
+- SEP‑41 (padrão de token)
+- WebAssembly `wasm32-unknown-unknown`
+- Stellar CLI / Soroban CLI (`stellar-cli`) para build, optimize, deploy e invoke
+- Cargo + rustup (toolchain e build)
+- Bash scripts (`contracts/braza_token/scripts/*.sh`) e Makefile (`contracts/braza_token/Makefile`) para automação
+- Proptest (fuzz/property tests)
+- Tarpaulin (cobertura de testes)
+- Rand e Dotenv (suporte a testes e config local)
+
+---
+
 ## 🔧 Funcionalidades Implementadas
 
 ## ✔️ SEP‑41 (Completo)
